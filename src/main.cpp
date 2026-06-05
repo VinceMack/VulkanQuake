@@ -64,8 +64,8 @@ int main(int argc, char* argv[]) {
         std::cout << "SUCCESS! SDL3, Vulkan, and VMA Initialized perfectly.\n";
     }
 
-    // 1. Find the data directory relative to the build layout.
-    std::filesystem::path dataPath = std::filesystem::current_path().parent_path().parent_path() / "data";
+    // 1. Find the data directory relative to the repository root.
+    std::filesystem::path dataPath = std::filesystem::current_path() / "data";
 
     // 2. Initialize VFS
     engine::vfs::VirtualFileSystem vfs(dataPath);
