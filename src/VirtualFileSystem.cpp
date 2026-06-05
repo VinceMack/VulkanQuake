@@ -6,7 +6,7 @@
 #include <expected>
 #include <fstream>
 
-namespace qk::vfs {
+namespace engine::vfs {
 
 VirtualFileSystem::VirtualFileSystem(std::filesystem::path baseDir)
     : m_baseDir(std::move(baseDir)) {
@@ -18,7 +18,7 @@ std::string VirtualFileSystem::NormalizePath(const std::string& path) const {
     // Quake paths strictly use forward slashes
     std::replace(normalized.begin(), normalized.end(), '\\', '/');
     
-    // Quake paths are case-insensitive. We normalize to lowercase.
+    // Quake paths are case-insensitive. I normalize to lowercase.
     // Cast to unsigned char to prevent undefined behavior with std::tolower
     std::transform(normalized.begin(), normalized.end(), normalized.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -71,12 +71,12 @@ bool VirtualFileSystem::MountPak(const std::string& pakFilename) {
 
     // Process each entry and add it to our registry
     for (const auto& entry : entries) {
-        // strnlen ensures we don't overflow if the name fills exactly 56 chars without a null terminator
+        // strnlen ensures I don't overflow if the name fills exactly 56 chars without a null terminator
         std::string vPath(entry.name, strnlen(entry.name, sizeof(entry.name)));
         vPath = NormalizePath(vPath);
 
         // Note: Quake files are strictly Little-Endian. On modern x86_64/ARM64 this is fine.
-        // If compiling for a Big-Endian system (e.g., PowerPC), we would need to byteswap 
+        // If compiling for a Big-Endian system (e.g., PowerPC), I would need to byteswap 
         // entry.fileOffset and entry.fileLength here.
         m_fileRegistry[vPath] = FileLocation{
             .sourcePak = pakFilename,
@@ -140,4 +140,4 @@ std::expected<std::vector<std::byte>, VfsError> VirtualFileSystem::ReadFile(cons
     return buffer;
 }
 
-} // namespace qk::vfs
+} // namespace engine::vfs

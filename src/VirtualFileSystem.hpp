@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace qk::vfs {
+namespace engine::vfs {
 
 // ============================================================================
 // PAK Binary Structures
@@ -94,4 +94,4 @@ private:
     std::unordered_map<std::string, FileLocation> m_fileRegistry;
 };
 
-} // namespace qk::vfs
+} // namespace engine::vfs
