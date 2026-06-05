@@ -39,6 +39,8 @@ FetchContent_MakeAvailable(fetch_sdl3)
 add_executable(VulkanQuake 
     src/main.cpp
     src/vk_mem_alloc.cpp
+    src/VirtualFileSystem.cpp
+    src/VirtualFileSystem.hpp
 )
 
 # Link everything
