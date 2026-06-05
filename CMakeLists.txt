@@ -36,11 +36,14 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(fetch_sdl3)
 
 # Add your engine files
-add_executable(VulkanQuake 
+add_executable(VulkanQuake
+    src/bspFormat.hpp
     src/main.cpp
-    src/vk_mem_alloc.cpp
+    src/Map.cpp
+    src/Map.hpp
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
+    src/vk_mem_alloc.cpp
 )
 
 # Link everything
