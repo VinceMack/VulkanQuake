@@ -4,6 +4,10 @@
 #include <VkBootstrap.h>
 #include <vma/vk_mem_alloc.h> // VMA
 #include <iostream>
+#include "VirtualFileSystem.hpp"
+#include "Map.hpp"
+#include <filesystem>
+#include <vector>
 
 int main(int argc, char* argv[]) {
     std::cout << "Starting Vulkan Quake Engine..." << std::endl;
@@ -58,6 +62,39 @@ int main(int argc, char* argv[]) {
     VmaAllocator allocator;
     if (vmaCreateAllocator(&allocatorInfo, &allocator) == VK_SUCCESS) {
         std::cout << "SUCCESS! SDL3, Vulkan, and VMA Initialized perfectly.\n";
+    }
+
+    // 1. Find the data directory relative to the build layout.
+    std::filesystem::path dataPath = std::filesystem::current_path().parent_path().parent_path() / "data";
+
+    // 2. Initialize VFS
+    engine::vfs::VirtualFileSystem vfs(dataPath);
+    std::cout << "Mounting VFS from: " << std::filesystem::absolute(dataPath) << "\n";
+    
+    if (vfs.MountPak("pak0.pak")) {
+        std::cout << "Successfully mounted pak0.pak!\n";
+    } else {
+        std::cerr << "ERROR: Could not find or read pak0.pak!\n";
+    }
+
+    // 3. Extract the Map and Parse it
+    auto mapData = vfs.ReadFile("maps/e1m1.bsp");
+    
+    if (mapData) {
+        std::cout << "Successfully extracted maps/e1m1.bsp (" << mapData->size() << " bytes)\n";
+        
+        try {
+            // Pass the byte buffer to our Map parser
+            engine::Map e1m1(*mapData);
+            
+            // At this point, e1m1.GetVertices() and e1m1.GetIndices() 
+            // hold our triangulated Vulkan data!
+            
+        } catch (const std::exception& e) {
+            std::cerr << "Map Parsing Error: " << e.what() << "\n";
+        }
+    } else {
+        std::cerr << "ERROR: Could not find maps/e1m1.bsp inside the VFS!\n";
     }
 
     SDL_Delay(3000); // Hold window open
