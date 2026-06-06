@@ -35,6 +35,36 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(fetch_sdl3)
 
+# SHADER COMPILATION
+# Find the GLSL to SPIR-V compiler included in the Vulkan SDK
+find_program(GLSLC glslc REQUIRED)
+
+# Define our shader files
+set(SHADER_FILES 
+    shaders/mesh.vert 
+    shaders/mesh.frag
+)
+
+set(SPIRV_FILES "")
+
+# Tell CMake how to compile each shader into the build directory
+foreach(SHADER ${SHADER_FILES})
+    get_filename_component(FILE_NAME ${SHADER} NAME)
+    set(OUTPUT_SPV "${CMAKE_CURRENT_BINARY_DIR}/${FILE_NAME}.spv")
+    
+    add_custom_command(
+        OUTPUT ${OUTPUT_SPV}
+        COMMAND ${GLSLC} ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER} -o ${OUTPUT_SPV}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}
+        COMMENT "Compiling shader ${FILE_NAME} to SPIR-V..."
+    )
+    
+    list(APPEND SPIRV_FILES ${OUTPUT_SPV})
+endforeach()
+
+# Create a custom target that forces shaders to compile before the engine builds
+add_custom_target(CompileShaders DEPENDS ${SPIRV_FILES})
+
 # Add your engine files
 add_executable(VulkanQuake
     src/bspFormat.hpp
@@ -47,6 +77,9 @@ add_executable(VulkanQuake
     src/GpuBuffer.hpp
     src/GpuBuffer.cpp
 )
+
+# Tell CMake to build the shaders BEFORE it builds VulkanQuake
+add_dependencies(VulkanQuake CompileShaders)
 
 # Link everything
 target_link_libraries(VulkanQuake PRIVATE 
