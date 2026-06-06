@@ -81,6 +81,8 @@ add_executable(VulkanQuake
     src/Map.hpp
     src/PipelineSetup.hpp
     src/PipelineSetup.cpp
+    src/Renderer.cpp
+    src/Renderer.hpp
     src/Shader.hpp
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
