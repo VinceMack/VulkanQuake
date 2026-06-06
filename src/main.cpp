@@ -11,6 +11,9 @@
 #include "GpuBuffer.hpp"
 #include "Shader.hpp"
 #include "PipelineSetup.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <array>
 
 static std::filesystem::path find_data_directory(const std::filesystem::path& start, const std::filesystem::path& exeDir) {
     std::vector<std::filesystem::path> starts = { start, exeDir };
@@ -169,9 +172,11 @@ int main(int argc, char* argv[]) {
     auto mapData = vfs.ReadFile("maps/e1m1.bsp");
     
     // Upload the Map's vertex and index data to VRAM using our staging buffer helper function
+    uint32_t mapIndexCount = 0;
     if (mapData) {
         try {
             engine::Map e1m1(*mapData);
+            mapIndexCount = e1m1.GetIndices().size();
             
             auto verticesSpan = std::span(reinterpret_cast<const std::byte*>(e1m1.GetVertices().data()), 
                                           e1m1.GetVertices().size() * sizeof(engine::RenderVertex));
@@ -238,7 +243,144 @@ int main(int argc, char* argv[]) {
 
     std::cout << "SUCCESS! GPU State fully baked and ready to draw.\n";
 
-    SDL_Delay(3000); // Hold window open
+    // SYNCHRONIZATION & FRAMES IN FLIGHT
+    const uint32_t MAX_FRAMES_IN_FLIGHT = swapchain_images.size();
+    uint32_t currentFrame = 0;
+
+    std::vector<VkSemaphore> imageAvailableSemaphores(MAX_FRAMES_IN_FLIGHT);
+    std::vector<VkSemaphore> renderFinishedSemaphores(MAX_FRAMES_IN_FLIGHT);
+    std::vector<VkFence> inFlightFences(MAX_FRAMES_IN_FLIGHT);
+    std::vector<VkCommandBuffer> commandBuffers(MAX_FRAMES_IN_FLIGHT);
+
+    VkSemaphoreCreateInfo semaphoreInfo{};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    // Allocate Command Buffers
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = commandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = MAX_FRAMES_IN_FLIGHT;
+    vkAllocateCommandBuffers(vkb_device.device, &allocInfo, commandBuffers.data());
+
+    // Create Sync Objects for each frame
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkCreateSemaphore(vkb_device.device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]);
+        vkCreateSemaphore(vkb_device.device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]);
+        vkCreateFence(vkb_device.device, &fenceInfo, nullptr, &inFlightFences[i]);
+    }
+
+    // THE MAIN RENDER LOOP
+    std::cout << "Entering Main Loop... Look at the window!\n";
+    bool bQuit = false;
+    SDL_Event e;
+
+    // Move the camera FAR OUTSIDE the map, looking at the center
+    glm::vec3 cameraPos = glm::vec3(0.0f, -2500.0f, 1500.0f);
+    glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::vec3 upVector = glm::vec3(0.0f, 0.0f, 1.0f); // Z is UP in Quake!
+
+    while (!bQuit) {
+        // 1. Process OS Window Events
+        while (SDL_PollEvent(&e) != 0) {
+            if (e.type == SDL_EVENT_QUIT) {
+                bQuit = true;
+            }
+        }
+
+        // 2. Wait for the GPU to finish THIS SPECIFIC frame before we record
+        vkWaitForFences(vkb_device.device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+        vkResetFences(vkb_device.device, 1, &inFlightFences[currentFrame]);
+
+        // 3. Ask the Swapchain for the next image index
+        uint32_t imageIndex;
+        vkAcquireNextImageKHR(vkb_device.device, vkb_swapchain.swapchain, UINT64_MAX, 
+                              imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+        // 4. Begin Command Recording
+        VkCommandBuffer cmd = commandBuffers[currentFrame];
+        vkResetCommandBuffer(cmd, 0);
+
+        VkCommandBufferBeginInfo beginInfo{};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vkBeginCommandBuffer(cmd, &beginInfo);
+
+        // 5. Begin the Render Pass
+        VkRenderPassBeginInfo renderPassInfo{};
+        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        renderPassInfo.renderPass = renderPass;
+        renderPassInfo.framebuffer = framebuffers[imageIndex];
+        renderPassInfo.renderArea.offset = {0, 0};
+        renderPassInfo.renderArea.extent = swapchain_extent;
+
+        std::array<VkClearValue, 2> clearValues{};
+        clearValues[0].color = {{0.1f, 0.05f, 0.1f, 1.0f}}; // Dark Purple void
+        clearValues[1].depthStencil = {1.0f, 0};
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
+
+        vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        // 6. Bind the Pipeline and Map Data
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+        VkBuffer vertexBuffers[] = { vertexBuffer.buffer };
+        VkDeviceSize offsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+        vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        // 7. Calculate Camera Math
+        glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, upVector);
+        glm::mat4 proj = glm::perspective(glm::radians(75.0f), 
+            (float)swapchain_extent.width / (float)swapchain_extent.height, 0.1f, 10000.0f);
+        proj[1][1] *= -1; // Fix Vulkan Y-down
+
+        glm::mat4 mvp = proj * view;
+        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
+
+        // 8. THE DRAW CALL!
+        vkCmdDrawIndexed(cmd, mapIndexCount, 1, 0, 0, 0);
+
+        // 9. End Recording
+        vkCmdEndRenderPass(cmd);
+        vkEndCommandBuffer(cmd);
+
+        // 10. Submit to the GPU Queue
+        VkSubmitInfo submitInfo{};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &cmd;
+
+        VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]);
+
+        // 11. Present the image to the screen
+        VkPresentInfoKHR presentInfo{};
+        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+        presentInfo.waitSemaphoreCount = 1;
+        presentInfo.pWaitSemaphores = signalSemaphores;
+        VkSwapchainKHR swapchains[] = { vkb_swapchain.swapchain };
+        presentInfo.swapchainCount = 1;
+        presentInfo.pSwapchains = swapchains;
+        presentInfo.pImageIndices = &imageIndex;
+
+        vkQueuePresentKHR(graphicsQueue, &presentInfo);
+
+        // Advance the frame index
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
 
     // Cleanup (Reverse order of creation!)
     vkDeviceWaitIdle(vkb_device.device); // Make sure the GPU is done before destroying things
@@ -254,6 +396,13 @@ int main(int argc, char* argv[]) {
     // Destroy Depth Buffer (This was causing the VMA crash!)
     vkDestroyImageView(vkb_device.device, depthBuffer.view, nullptr);
     vmaDestroyImage(allocator, depthBuffer.image, depthBuffer.allocation);
+
+    // Destroy Sync Primitives
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) {
+        vkDestroySemaphore(vkb_device.device, imageAvailableSemaphores[i], nullptr);
+        vkDestroySemaphore(vkb_device.device, renderFinishedSemaphores[i], nullptr);
+        vkDestroyFence(vkb_device.device, inFlightFences[i], nullptr);
+    }
 
     // Destroy Swapchain
     vkb_swapchain.destroy_image_views(swapchain_image_views);
