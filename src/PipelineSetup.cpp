@@ -6,6 +6,25 @@
 
 namespace engine {
 
+VkDescriptorSetLayout PipelineSetup::CreateDescriptorSetLayout(VkDevice device) {
+    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+    samplerLayoutBinding.binding = 0;
+    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &samplerLayoutBinding;
+
+    VkDescriptorSetLayout descriptorSetLayout;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create descriptor set layout");
+    }
+    return descriptorSetLayout;
+}
+
 DepthBuffer PipelineSetup::CreateDepthBuffer(VkDevice device, VmaAllocator allocator, VkExtent2D extent) {
     DepthBuffer depth;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
@@ -115,7 +134,7 @@ std::vector<VkFramebuffer> PipelineSetup::CreateFramebuffers(VkDevice device, Vk
     return framebuffers;
 }
 
-VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device) {
+VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
     VkPushConstantRange pushConstant{};
     pushConstant.offset = 0;
     pushConstant.size = sizeof(glm::mat4); // Space for our Camera Render Matrix
@@ -123,6 +142,8 @@ VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device) {
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
@@ -155,18 +176,24 @@ VkPipeline PipelineSetup::CreateGraphicsPipeline(VkDevice device, VkRenderPass r
     bindingDescription.stride = sizeof(engine::RenderVertex);
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attributeDescription{};
-    attributeDescription.binding = 0;
-    attributeDescription.location = 0;
-    attributeDescription.format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescription.offset = offsetof(engine::RenderVertex, position);
+    std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    // Position
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[0].offset = offsetof(engine::RenderVertex, position);
+    // UVs
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[1].offset = offsetof(engine::RenderVertex, uv);
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInputInfo.vertexBindingDescriptionCount = 1;
     vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = 1;
-    vertexInputInfo.pVertexAttributeDescriptions = &attributeDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     // 3. Input Assembly (Triangles)
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};

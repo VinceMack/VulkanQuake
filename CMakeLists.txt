@@ -70,8 +70,12 @@ add_executable(VulkanQuake
     src/bspFormat.hpp
     src/Camera.cpp
     src/Camera.hpp
+    src/Engine.cpp
+    src/Engine.hpp
     src/GpuBuffer.hpp
     src/GpuBuffer.cpp
+    src/GpuImage.cpp
+    src/GpuImage.hpp
     src/main.cpp
     src/Map.cpp
     src/Map.hpp
@@ -81,6 +85,8 @@ add_executable(VulkanQuake
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
     src/vk_mem_alloc.cpp
+    src/Window.cpp
+    src/Window.hpp
 )
 
 # Tell CMake to build the shaders BEFORE it builds VulkanQuake

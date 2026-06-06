@@ -26,7 +26,9 @@ public:
                                                          VkImageView depthView);
     
     // Defines external shader variables (like our Camera Matrix Push Constant)
-    static VkPipelineLayout CreatePipelineLayout(VkDevice device);
+    // Defines the binding layout for our textures
+    static VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device);
+    static VkPipelineLayout CreatePipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout);
     
     // Bakes the shaders, vertex format, and state into the final GPU state machine
     static VkPipeline CreateGraphicsPipeline(VkDevice device, VkRenderPass renderPass, 

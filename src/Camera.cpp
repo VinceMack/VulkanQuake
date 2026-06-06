@@ -9,7 +9,7 @@ void Camera::ProcessMouse(float xoffset, float yoffset) {
     yoffset *= mouseSensitivity;
 
     yaw -= xoffset;   // Subtract to look right when moving mouse right
-    pitch += yoffset; // Add to look down when moving mouse down // Subtracting because y-coordinates go from bottom to top
+    pitch -= yoffset; // Add to look down when moving mouse down // Subtracting because y-coordinates go from bottom to top
 
     // Constrain pitch so we don't break our neck (and the lookAt matrix doesn't flip)
     if (pitch > 89.0f) pitch = 89.0f;

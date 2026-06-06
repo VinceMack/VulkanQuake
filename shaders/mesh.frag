@@ -2,10 +2,13 @@
 
 // Fragment Shader
 
+layout(location = 0) in vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
+// Descriptor Set binding
+layout(binding = 0) uniform sampler2D texSampler;
+
 void main() {
-    // Output a solid white/gray color for the walls
-    // (RGBA: Red, Green, Blue, Alpha)
-    outColor = vec4(0.8, 0.8, 0.8, 1.0);
+    // Sample the color from the texture at the given UV coordinate
+    outColor = texture(texSampler, fragUV);
 }

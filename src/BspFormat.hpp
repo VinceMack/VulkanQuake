@@ -38,6 +38,23 @@ struct BspFace {
 
 #pragma pack(pop)
 
+struct BspTexInfo {
+    float vecS[3], distS; // S vector (U coordinate)
+    float vecT[3], distT; // T vector (V coordinate)
+    uint32_t miptex_id;   // Index into the Texture lump
+    uint32_t flags;       // Animation flags (water, sky, etc)
+};
+
+struct BspMiptex {
+    char name[16];        // Name of the texture (e.g. "metal1_3")
+    uint32_t width;       // Width in pixels
+    uint32_t height;      // Height in pixels
+    uint32_t offset1;     // Offset to mipmap level 0 (full res)
+    uint32_t offset2;     // Offset to mipmap level 1 (half res)
+    uint32_t offset4;     // Offset to mipmap level 2 (quarter res)
+    uint32_t offset8;     // Offset to mipmap level 3 (eighth res)
+};
+
 // Lump Indices
 enum BspLumpIndex {
     LUMP_ENTITIES = 0,
