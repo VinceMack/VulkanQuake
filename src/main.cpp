@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
+#include "Camera.hpp"
 
 static std::filesystem::path find_data_directory(const std::filesystem::path& start, const std::filesystem::path& exeDir) {
     std::vector<std::filesystem::path> starts = { start, exeDir };
@@ -278,10 +279,14 @@ int main(int argc, char* argv[]) {
     bool bQuit = false;
     SDL_Event e;
 
-    // Move the camera FAR OUTSIDE the map, looking at the center
-    glm::vec3 cameraPos = glm::vec3(0.0f, -2500.0f, 1500.0f);
-    glm::vec3 cameraTarget = glm::vec3(0.0f, 0.0f, 0.0f);
-    glm::vec3 upVector = glm::vec3(0.0f, 0.0f, 1.0f); // Z is UP in Quake!
+    // Lock the mouse to the center of the screen
+    SDL_SetWindowRelativeMouseMode(window, true);
+
+    // E1M1 starting room is roughly at (400, 400, 100)
+    engine::Camera camera(glm::vec3(400.0f, 400.0f, 100.0f));
+
+    // Keep track of time for smooth movement
+    uint64_t lastTime = SDL_GetTicks();
 
     while (!bQuit) {
         // 1. Process OS Window Events
@@ -289,7 +294,32 @@ int main(int argc, char* argv[]) {
             if (e.type == SDL_EVENT_QUIT) {
                 bQuit = true;
             }
+            // Press ESC to exit the mouse trap and quit
+            if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) {
+                bQuit = true;
+            }
+            // Read raw mouse movement
+            if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                camera.ProcessMouse(e.motion.xrel, e.motion.yrel);
+            }
         }
+
+        // Calculate Delta Time
+        uint64_t currentTime = SDL_GetTicks();
+        float deltaTime = (currentTime - lastTime) / 1000.0f;
+        lastTime = currentTime;
+
+        // Read Keyboard State for movement
+        const bool* keys = SDL_GetKeyboardState(NULL);
+        float moveForward = 0.0f;
+        float moveRight = 0.0f;
+        
+        if (keys[SDL_SCANCODE_W]) moveForward += 1.0f;
+        if (keys[SDL_SCANCODE_S]) moveForward -= 1.0f;
+        if (keys[SDL_SCANCODE_D]) moveRight += 1.0f;
+        if (keys[SDL_SCANCODE_A]) moveRight -= 1.0f;
+        
+        camera.ProcessKeyboard(moveForward, moveRight, deltaTime);
 
         // 2. Wait for the GPU to finish THIS SPECIFIC frame before we record
         vkWaitForFences(vkb_device.device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
@@ -332,10 +362,9 @@ int main(int argc, char* argv[]) {
         vkCmdBindIndexBuffer(cmd, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
         // 7. Calculate Camera Math
-        glm::mat4 view = glm::lookAt(cameraPos, cameraTarget, upVector);
+        glm::mat4 view = camera.GetViewMatrix();
         glm::mat4 proj = glm::perspective(glm::radians(75.0f), 
             (float)swapchain_extent.width / (float)swapchain_extent.height, 0.1f, 10000.0f);
-        proj[1][1] *= -1; // Fix Vulkan Y-down
 
         glm::mat4 mvp = proj * view;
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
