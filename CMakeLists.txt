@@ -44,6 +44,8 @@ add_executable(VulkanQuake
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
     src/vk_mem_alloc.cpp
+    src/GpuBuffer.hpp
+    src/GpuBuffer.cpp
 )
 
 # Link everything
