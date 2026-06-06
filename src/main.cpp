@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <vector>
 #include "GpuBuffer.hpp"
+#include "Shader.hpp"
 
 static std::filesystem::path find_data_directory(const std::filesystem::path& start, const std::filesystem::path& exeDir) {
     std::vector<std::filesystem::path> starts = { start, exeDir };
@@ -41,11 +42,25 @@ static std::filesystem::path find_data_directory(const std::filesystem::path& st
     return {};
 }
 
+static std::filesystem::path find_shader_directory(const std::string& filename, const std::filesystem::path& exeDir) {
+    std::vector<std::filesystem::path> searchPaths = {
+        std::filesystem::current_path() / filename,
+        exeDir / filename,
+        exeDir.parent_path() / filename // This looks in build/ if the exe is in build/Debug/
+    };
+    for (const auto& p : searchPaths) {
+        if (std::filesystem::exists(p)) return p;
+    }
+    return filename; // Fallback
+}
+
 int main(int argc, char* argv[]) {
     std::cout << "Starting Vulkan Quake Engine..." << std::endl;
 
     engine::GpuBuffer vertexBuffer;
     engine::GpuBuffer indexBuffer;
+    VkShaderModule vertShader = VK_NULL_HANDLE;
+    VkShaderModule fragShader = VK_NULL_HANDLE;
 
     // Initialize SDL3
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -178,6 +193,19 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Load compiled shaders
+    std::cout << "Loading Shaders...\n";
+    try {
+        std::string vertPath = find_shader_directory("mesh.vert.spv", exeDir).string();
+        std::string fragPath = find_shader_directory("mesh.frag.spv", exeDir).string();
+
+        vertShader = engine::Shader::LoadModule(vkb_device.device, vertPath);
+        fragShader = engine::Shader::LoadModule(vkb_device.device, fragPath);
+        std::cout << "Successfully loaded Shader Modules!\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Shader Loading Error: " << e.what() << "\n";
+    }
+
     SDL_Delay(3000); // Hold window open
 
     // 6. Cleanup (Reverse order!)
@@ -189,13 +217,16 @@ int main(int argc, char* argv[]) {
     vkDestroyCommandPool(vkb_device.device, commandPool, nullptr);
     // THIRD: Destroy the memory allocator
     vmaDestroyAllocator(allocator);
-    // FOURTH: Destroy the logical device
+    // FOURTH: Destroy the shader modules
+    vkDestroyShaderModule(vkb_device.device, vertShader, nullptr);
+    vkDestroyShaderModule(vkb_device.device, fragShader, nullptr);
+    // FIFTH: Destroy the logical device
     vkb::destroy_device(vkb_device);
-    // FIFTH: Destroy the window surface
+    // SIXTH: Destroy the window surface
     vkDestroySurfaceKHR(vkb_inst.instance, surface, nullptr);
-    // SIXTH: Destroy the Vulkan instance
+    // SEVENTH: Destroy the Vulkan instance
     vkb::destroy_instance(vkb_inst);
-    // SEVENTH: Destroy SDL window and quit
+    // EIGHTH: Destroy SDL window and quit
     SDL_DestroyWindow(window);
     SDL_Quit();
 
