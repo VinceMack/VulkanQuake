@@ -9,6 +9,37 @@
 #include <filesystem>
 #include <vector>
 
+static std::filesystem::path find_data_directory(const std::filesystem::path& start, const std::filesystem::path& exeDir) {
+    std::vector<std::filesystem::path> starts = { start, exeDir };
+    for (const auto& s : starts) {
+        if (s.empty()) continue;
+        std::filesystem::path p = s;
+        while (true) {
+            std::filesystem::path cand = p / "data";
+            if (std::filesystem::exists(cand) && std::filesystem::is_directory(cand) &&
+                std::filesystem::exists(cand / "pak0.pak")) {
+                return cand;
+            }
+            auto parent = p.parent_path();
+            if (parent == p) break;
+            p = parent;
+        }
+    }
+    // As a last resort, walk up from current_path()
+    std::filesystem::path p = std::filesystem::current_path();
+    while (true) {
+        std::filesystem::path cand = p / "data";
+        if (std::filesystem::exists(cand) && std::filesystem::is_directory(cand) &&
+            std::filesystem::exists(cand / "pak0.pak")) {
+            return cand;
+        }
+        auto parent = p.parent_path();
+        if (parent == p) break;
+        p = parent;
+    }
+    return {};
+}
+
 int main(int argc, char* argv[]) {
     std::cout << "Starting Vulkan Quake Engine..." << std::endl;
 
@@ -64,13 +95,27 @@ int main(int argc, char* argv[]) {
         std::cout << "SUCCESS! SDL3, Vulkan, and VMA Initialized perfectly.\n";
     }
 
-    // 1. Find the data directory relative to the repository root.
-    std::filesystem::path dataPath = std::filesystem::current_path() / "data";
+    // 1. Find the data directory by searching upward from the current path
+    //    and from the executable's directory so running from build/Debug works.
+    std::filesystem::path exeDir;
+    if (argc > 0) {
+        try {
+            exeDir = std::filesystem::absolute(argv[0]).parent_path();
+        } catch (...) {
+            exeDir = std::filesystem::current_path();
+        }
+    }
+
+    std::filesystem::path dataPath = find_data_directory(std::filesystem::current_path(), exeDir);
+    if (dataPath.empty()) {
+        std::cerr << "WARNING: data directory with pak0.pak not found by search.\n";
+        dataPath = std::filesystem::current_path() / "data"; // best-effort fallback
+    }
 
     // 2. Initialize VFS
     engine::vfs::VirtualFileSystem vfs(dataPath);
     std::cout << "Mounting VFS from: " << std::filesystem::absolute(dataPath) << "\n";
-    
+
     if (vfs.MountPak("pak0.pak")) {
         std::cout << "Successfully mounted pak0.pak!\n";
     } else {
