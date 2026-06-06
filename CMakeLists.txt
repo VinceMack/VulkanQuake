@@ -68,6 +68,8 @@ add_custom_target(CompileShaders DEPENDS ${SPIRV_FILES})
 # Add your engine files
 add_executable(VulkanQuake
     src/bspFormat.hpp
+    src/Camera.cpp
+    src/Camera.hpp
     src/GpuBuffer.hpp
     src/GpuBuffer.cpp
     src/main.cpp
