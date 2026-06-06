@@ -10,6 +10,7 @@
 #include <vector>
 #include "GpuBuffer.hpp"
 #include "Shader.hpp"
+#include "PipelineSetup.hpp"
 
 static std::filesystem::path find_data_directory(const std::filesystem::path& start, const std::filesystem::path& exeDir) {
     std::vector<std::filesystem::path> starts = { start, exeDir };
@@ -206,27 +207,78 @@ int main(int argc, char* argv[]) {
         std::cerr << "Shader Loading Error: " << e.what() << "\n";
     }
 
+    // Build the Swapchain via vk-bootstrap
+    std::cout << "Building Swapchain...\n";
+    vkb::SwapchainBuilder swapchain_builder{ vkb_device };
+    vkb::Swapchain vkb_swapchain = swapchain_builder.build().value();
+    std::vector<VkImage> swapchain_images = vkb_swapchain.get_images().value();
+    std::vector<VkImageView> swapchain_image_views = vkb_swapchain.get_image_views().value();
+    VkFormat swapchain_format = vkb_swapchain.image_format;
+    VkExtent2D swapchain_extent = vkb_swapchain.extent;
+
+    // Pipeline and Render Targets Setup
+    std::cout << "Building Graphics Pipeline...\n";
+    
+    // Depth Buffer
+    engine::DepthBuffer depthBuffer = engine::PipelineSetup::CreateDepthBuffer(
+        vkb_device.device, allocator, swapchain_extent);
+        
+    // Render Pass
+    VkRenderPass renderPass = engine::PipelineSetup::CreateRenderPass(
+        vkb_device.device, swapchain_format);
+        
+    // Framebuffers (Binding Images to Render Pass)
+    std::vector<VkFramebuffer> framebuffers = engine::PipelineSetup::CreateFramebuffers(
+        vkb_device.device, renderPass, swapchain_extent, swapchain_image_views, depthBuffer.view);
+        
+    // Pipeline Configuration
+    VkPipelineLayout pipelineLayout = engine::PipelineSetup::CreatePipelineLayout(vkb_device.device);
+    VkPipeline graphicsPipeline = engine::PipelineSetup::CreateGraphicsPipeline(
+        vkb_device.device, renderPass, pipelineLayout, vertShader, fragShader, swapchain_extent);
+
+    std::cout << "SUCCESS! GPU State fully baked and ready to draw.\n";
+
     SDL_Delay(3000); // Hold window open
 
-    // 6. Cleanup (Reverse order!)
-    // FIRST: Destroy the buffers explicitly. 
-    // They MUST be destroyed before VMA is shut down!
+    // Cleanup (Reverse order of creation!)
+    vkDeviceWaitIdle(vkb_device.device); // Make sure the GPU is done before destroying things
+
+    // Destroy Framebuffers
+    for (auto framebuffer : framebuffers) {
+        vkDestroyFramebuffer(vkb_device.device, framebuffer, nullptr);
+    }
+    vkDestroyPipeline(vkb_device.device, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(vkb_device.device, pipelineLayout, nullptr);
+    vkDestroyRenderPass(vkb_device.device, renderPass, nullptr);
+    
+    // Destroy Depth Buffer (This was causing the VMA crash!)
+    vkDestroyImageView(vkb_device.device, depthBuffer.view, nullptr);
+    vmaDestroyImage(allocator, depthBuffer.image, depthBuffer.allocation);
+
+    // Destroy Swapchain
+    vkb_swapchain.destroy_image_views(swapchain_image_views);
+    vkb::destroy_swapchain(vkb_swapchain);
+
+    // Destroy Map Buffers
     vertexBuffer.Destroy();
     indexBuffer.Destroy();
-    // SECOND: Destroy the command pool
+    
+    // Destroy Command Pool
     vkDestroyCommandPool(vkb_device.device, commandPool, nullptr);
-    // THIRD: Destroy the memory allocator
+    
+    // Destroy Allocator (Now fully empty, so it won't crash!)
     vmaDestroyAllocator(allocator);
-    // FOURTH: Destroy the shader modules
+    
+    // Destroy Shaders Modules
     vkDestroyShaderModule(vkb_device.device, vertShader, nullptr);
     vkDestroyShaderModule(vkb_device.device, fragShader, nullptr);
-    // FIFTH: Destroy the logical device
+    
+    // Destroy Core Vulkan
     vkb::destroy_device(vkb_device);
-    // SIXTH: Destroy the window surface
     vkDestroySurfaceKHR(vkb_inst.instance, surface, nullptr);
-    // SEVENTH: Destroy the Vulkan instance
     vkb::destroy_instance(vkb_inst);
-    // EIGHTH: Destroy SDL window and quit
+    
+    // Destroy SDL
     SDL_DestroyWindow(window);
     SDL_Quit();
 
