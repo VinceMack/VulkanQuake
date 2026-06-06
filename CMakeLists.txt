@@ -68,14 +68,17 @@ add_custom_target(CompileShaders DEPENDS ${SPIRV_FILES})
 # Add your engine files
 add_executable(VulkanQuake
     src/bspFormat.hpp
+    src/GpuBuffer.hpp
+    src/GpuBuffer.cpp
     src/main.cpp
     src/Map.cpp
     src/Map.hpp
+    src/PipelineSetup.hpp
+    src/PipelineSetup.cpp
+    src/Shader.hpp
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
     src/vk_mem_alloc.cpp
-    src/GpuBuffer.hpp
-    src/GpuBuffer.cpp
 )
 
 # Tell CMake to build the shaders BEFORE it builds VulkanQuake
