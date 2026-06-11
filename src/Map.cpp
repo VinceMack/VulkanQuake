@@ -35,11 +35,12 @@ Map::Map(std::span<const std::byte> bspData, std::span<const std::byte> paletteD
 }
 
 void Map::ParseLumps(std::span<const std::byte> data) {
-    m_bspVertices  = GetLump<bsp::BspVertex>(data, m_header->lumps[bsp::LUMP_VERTICES]);
-    m_bspEdges     = GetLump<bsp::BspEdge>(data,   m_header->lumps[bsp::LUMP_EDGES]);
-    m_bspSurfedges = GetLump<int32_t>(data,        m_header->lumps[bsp::LUMP_SURFEDGES]);
-    m_bspFaces     = GetLump<bsp::BspFace>(data,   m_header->lumps[bsp::LUMP_FACES]);
+    m_bspVertices  = GetLump<bsp::BspVertex>(data,  m_header->lumps[bsp::LUMP_VERTICES]);
+    m_bspEdges     = GetLump<bsp::BspEdge>(data,    m_header->lumps[bsp::LUMP_EDGES]);
+    m_bspSurfedges = GetLump<int32_t>(data,         m_header->lumps[bsp::LUMP_SURFEDGES]);
+    m_bspFaces     = GetLump<bsp::BspFace>(data,    m_header->lumps[bsp::LUMP_FACES]);
     m_bspTexInfos  = GetLump<bsp::BspTexInfo>(data, m_header->lumps[bsp::LUMP_TEXINFO]);
+    m_bspLighting  = GetLump<uint8_t>(data,         m_header->lumps[bsp::LUMP_LIGHTING]);
 
     std::cout << "Parsed BSP with " << m_bspFaces.size() << " faces.\n";
 }
@@ -155,19 +156,90 @@ void Map::TriangulateFaces() {
     // Create a bucket for every texture
     std::vector<std::vector<uint32_t>> indicesByTexture(m_textures.size());
 
+    // --- LIGHTMAP ATLAS SETUP ---
+    m_lightmapAtlas.name = "LightmapAtlas";
+    m_lightmapAtlas.width = 1024;
+    m_lightmapAtlas.height = 1024;
+    m_lightmapAtlas.pixelsRGBA.resize(1024 * 1024 * 4, std::byte{0});
+
+    int atlasX = 0;
+    int atlasY = 0;
+    int atlasRowHeight = 0;
+
+    // Reserve a 1x1 full-bright white pixel at (0,0) for surfaces without lightmaps (skies, slime)
+    m_lightmapAtlas.pixelsRGBA[0] = std::byte{255}; // R
+    m_lightmapAtlas.pixelsRGBA[1] = std::byte{255}; // G
+    m_lightmapAtlas.pixelsRGBA[2] = std::byte{255}; // B
+    m_lightmapAtlas.pixelsRGBA[3] = std::byte{255}; // A
+    atlasX = 1; 
+    atlasRowHeight = 1;
+    // ----------------------------
+
     for (const auto& face : m_bspFaces) {
         const auto& texInfo = m_bspTexInfos[face.texinfo_id];
-        uint32_t texID = texInfo.miptex_id;
-        // Safety check
-        if (texID >= m_textures.size()) texID = 0;
+        uint32_t texID = texInfo.miptex_id >= m_textures.size() ? 0 : texInfo.miptex_id;
+        
+        uint32_t texWidth = m_textures[texID].width == 0 ? 1 : m_textures[texID].width;
+        uint32_t texHeight = m_textures[texID].height == 0 ? 1 : m_textures[texID].height;
 
-        uint32_t texWidth = m_textures[texID].width;
-        uint32_t texHeight = m_textures[texID].height;
-        // Since some animated textures are blank, protect against divide-by-zero
-        if (texWidth == 0 || texHeight == 0) { texWidth = 1; texHeight = 1; }
+        // --- PASS 1: Calculate Lightmap Bounds ---
+        float min_u = 999999.0f, max_u = -999999.0f;
+        float min_v = 999999.0f, max_v = -999999.0f;
 
+        for (int i = 0; i < face.num_edges; ++i) {
+            int32_t surfedge = m_bspSurfedges[face.first_edge + i];
+            uint32_t vIndex = (surfedge >= 0) ? m_bspEdges[surfedge].v[0] : m_bspEdges[-surfedge].v[1];
+            const auto& bspVert = m_bspVertices[vIndex];
+
+            float u = bspVert.x * texInfo.vecS[0] + bspVert.y * texInfo.vecS[1] + bspVert.z * texInfo.vecS[2] + texInfo.distS;
+            float v = bspVert.x * texInfo.vecT[0] + bspVert.y * texInfo.vecT[1] + bspVert.z * texInfo.vecT[2] + texInfo.distT;
+            
+            min_u = std::min(min_u, u); max_u = std::max(max_u, u);
+            min_v = std::min(min_v, v); max_v = std::max(max_v, v);
+        }
+
+        // Quake lightmaps are 1/16th the resolution of the diffuse texture
+        int lm_min_u = (int)std::floor(min_u / 16.0f);
+        int lm_max_u = (int)std::ceil(max_u / 16.0f);
+        int lm_min_v = (int)std::floor(min_v / 16.0f);
+        int lm_max_v = (int)std::ceil(max_v / 16.0f);
+
+        int lm_width = (lm_max_u - lm_min_u) + 1;
+        int lm_height = (lm_max_v - lm_min_v) + 1;
+
+        int currentAtlasX = 0;
+        int currentAtlasY = 0;
+
+        // Pack into Atlas if it has a lightmap
+        if (face.lightmap_offset != -1) {
+            if (atlasX + lm_width > m_lightmapAtlas.width) {
+                atlasX = 0;
+                atlasY += atlasRowHeight;
+                atlasRowHeight = 0;
+            }
+            
+            currentAtlasX = atlasX;
+            currentAtlasY = atlasY;
+            
+            // Copy pixels from BSP Lump 8 into our RGBA Atlas
+            for (int y = 0; y < lm_height; ++y) {
+                for (int x = 0; x < lm_width; ++x) {
+                    uint8_t brightness = m_bspLighting[face.lightmap_offset + (y * lm_width) + x];
+                    
+                    int atlasPixelIndex = ((currentAtlasY + y) * m_lightmapAtlas.width + (currentAtlasX + x)) * 4;
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 0] = static_cast<std::byte>(brightness);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 1] = static_cast<std::byte>(brightness);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 2] = static_cast<std::byte>(brightness);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 3] = std::byte{255};
+                }
+            }
+            
+            atlasX += lm_width;
+            atlasRowHeight = std::max(atlasRowHeight, lm_height);
+        }
+
+        // --- PASS 2: Generate Vertices with UVs ---
         std::vector<uint32_t> faceIndices;
-
         for (int i = 0; i < face.num_edges; ++i) {
             int32_t surfedge = m_bspSurfedges[face.first_edge + i];
             uint32_t vIndex = (surfedge >= 0) ? m_bspEdges[surfedge].v[0] : m_bspEdges[-surfedge].v[1];
@@ -182,9 +254,21 @@ void Map::TriangulateFaces() {
             float u = bspVert.x * texInfo.vecS[0] + bspVert.y * texInfo.vecS[1] + bspVert.z * texInfo.vecS[2] + texInfo.distS;
             float v = bspVert.x * texInfo.vecT[0] + bspVert.y * texInfo.vecT[1] + bspVert.z * texInfo.vecT[2] + texInfo.distT;
             
-            // Normalize the UVs for Vulkan (0.0 to 1.0)
             rv.uv.x = u / (float)texWidth;
             rv.uv.y = v / (float)texHeight;
+
+            if (face.lightmap_offset != -1) {
+                // Calculate position inside the specific lightmap block (offset by half a pixel for sampling accuracy)
+                float u_offset = (u / 16.0f) - lm_min_u + 0.5f;
+                float v_offset = (v / 16.0f) - lm_min_v + 0.5f;
+                // Convert to global Atlas UVs
+                rv.lightmapUV.x = (currentAtlasX + u_offset) / (float)m_lightmapAtlas.width;
+                rv.lightmapUV.y = (currentAtlasY + v_offset) / (float)m_lightmapAtlas.height;
+            } else {
+                // Point to the fullbright white pixel we created at 0,0
+                rv.lightmapUV.x = 0.5f / (float)m_lightmapAtlas.width;
+                rv.lightmapUV.y = 0.5f / (float)m_lightmapAtlas.height;
+            }
 
             m_renderVertices.push_back(rv);
             faceIndices.push_back(m_renderVertices.size() - 1);
@@ -200,20 +284,16 @@ void Map::TriangulateFaces() {
 
     // Now, sequentialize the buckets into our final index buffer and record the batches
     for (uint32_t t = 0; t < indicesByTexture.size(); ++t) {
-        if (indicesByTexture[t].empty()) continue; // Skip textures not used in this map
-
+        if (indicesByTexture[t].empty()) continue;
         RenderBatch batch;
         batch.textureId = t;
         batch.firstIndex = static_cast<uint32_t>(m_renderIndices.size());
         batch.indexCount = static_cast<uint32_t>(indicesByTexture[t].size());
-        
         m_renderBatches.push_back(batch);
-        
-        // Append all indices for this texture to the master buffer
         m_renderIndices.insert(m_renderIndices.end(), indicesByTexture[t].begin(), indicesByTexture[t].end());
     }
 
-    std::cout << "Triangulated map into " << (m_renderIndices.size() / 3) << " unique Vulkan triangles.\n";
+    std::cout << "Packed Lightmaps into Atlas. Max Y used: " << (atlasY + atlasRowHeight) << " / 1024\n";
 }
 
 } // namespace engine

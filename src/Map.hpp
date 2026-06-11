@@ -13,6 +13,7 @@ namespace engine {
 struct RenderVertex {
     glm::vec3 position;
     glm::vec2 uv;       // Texture coordinates
+    glm::vec2 lightmapUV; // For future lightmap support
     uint32_t textureId; // Which texture does this vertex use?
 };
 
@@ -34,23 +35,22 @@ class Map {
 public:
     // Takes the raw byte buffer loaded by the VirtualFileSystem
     Map(std::span<const std::byte> bspData, std::span<const std::byte> paletteData);
-
     const std::vector<RenderBatch>& GetRenderBatches() const { return m_renderBatches; }
     const std::vector<RenderVertex>& GetVertices() const { return m_renderVertices; }
     const std::vector<uint32_t>& GetIndices() const { return m_renderIndices; }
-
     // Expose the extracted textures
     const std::vector<TextureData>& GetTextures() const { return m_textures; }
-
     const std::vector<Entity>& GetEntities() const { return m_entities; }
+    const TextureData& GetLightmapAtlas() const { return m_lightmapAtlas; }
 
 private:
     void ParseLumps(std::span<const std::byte> data);
     void ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette);
     void TriangulateFaces();
-
     void ParseEntities(std::span<const std::byte> data);
-    
+
+    std::span<const uint8_t> m_bspLighting;
+    TextureData m_lightmapAtlas;
     std::vector<Entity> m_entities;
 
     // Raw pointers mapped directly over the binary data (Zero-copy parsing!)

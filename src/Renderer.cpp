@@ -35,8 +35,11 @@ Renderer::Renderer(Window* window, const std::string& exeDir)
 
 Renderer::~Renderer() {
     if (!m_vkbDevice.device) return;
+    
+    // 1. Wait for the GPU to completely finish the last frame
     vkDeviceWaitIdle(m_vkbDevice.device); 
 
+    // 2. Destroy Framebuffers & Pipelines
     for (auto framebuffer : m_framebuffers) {
         vkDestroyFramebuffer(m_vkbDevice.device, framebuffer, nullptr);
     }
@@ -44,29 +47,36 @@ Renderer::~Renderer() {
     vkDestroyPipelineLayout(m_vkbDevice.device, m_pipelineLayout, nullptr);
     vkDestroyRenderPass(m_vkbDevice.device, m_renderPass, nullptr);
     
+    // 3. Destroy Command Pool (This frees all Command Buffers and their references)
+    if (m_commandPool) vkDestroyCommandPool(m_vkbDevice.device, m_commandPool, nullptr);
+
+    // 4. Destroy Descriptor Pool (This frees all Descriptor Sets and their references)
     if (m_descriptorPool) vkDestroyDescriptorPool(m_vkbDevice.device, m_descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(m_vkbDevice.device, m_descriptorSetLayout, nullptr);
 
+    // 5. Destroy Images and Buffers
     vkDestroyImageView(m_vkbDevice.device, m_depthBuffer.view, nullptr);
     vmaDestroyImage(m_allocator, m_depthBuffer.image, m_depthBuffer.allocation);
 
+    m_vertexBuffer.Destroy();
+    m_indexBuffer.Destroy();
+    for (auto& tex : m_gpuTextures) tex.Destroy();
+    m_lightmapAtlasTexture.Destroy(); // Safely destroy the Atlas here!
+
+    // 6. Destroy Sync Primitives & Swapchain
     for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
         vkDestroySemaphore(m_vkbDevice.device, m_imageAvailableSemaphores[i], nullptr);
         vkDestroySemaphore(m_vkbDevice.device, m_renderFinishedSemaphores[i], nullptr);
         vkDestroyFence(m_vkbDevice.device, m_inFlightFences[i], nullptr);
     }
-
     m_vkbSwapchain.destroy_image_views(m_swapchainImageViews);
     vkb::destroy_swapchain(m_vkbSwapchain);
 
-    m_vertexBuffer.Destroy();
-    m_indexBuffer.Destroy();
-    for (auto& tex : m_gpuTextures) tex.Destroy();
-    
-    vkDestroyCommandPool(m_vkbDevice.device, m_commandPool, nullptr);
-    vmaDestroyAllocator(m_allocator);
+    // 7. Destroy Core Vulkan & VMA
+    if (m_allocator) vmaDestroyAllocator(m_allocator);
     vkDestroyShaderModule(m_vkbDevice.device, m_vertShader, nullptr);
     vkDestroyShaderModule(m_vkbDevice.device, m_fragShader, nullptr);
+    
     vkb::destroy_device(m_vkbDevice);
     vkDestroySurfaceKHR(m_vkbInst.instance, m_surface, nullptr);
     vkb::destroy_instance(m_vkbInst);
@@ -185,12 +195,14 @@ void Renderer::UploadMap(const Map& map) {
         m_gpuTextures.push_back(engine::CreateAndUploadImage(vkCtx, texData));
     }
     m_renderBatches = map.GetRenderBatches();
+    m_lightmapAtlasTexture = engine::CreateAndUploadImage(vkCtx, map.GetLightmapAtlas());
 
     // Descriptor Sets for Textures
     if (!m_gpuTextures.empty()) {
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = static_cast<uint32_t>(m_gpuTextures.size());
+        // We now need 2 samplers per texture batch (Diffuse + Lightmap)
+        poolSize.descriptorCount = static_cast<uint32_t>(m_gpuTextures.size()) * 2;
 
         VkDescriptorPoolCreateInfo descPoolInfo{};
         descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -209,22 +221,39 @@ void Renderer::UploadMap(const Map& map) {
         m_descriptorSets.resize(m_gpuTextures.size());
         vkAllocateDescriptorSets(m_vkbDevice.device, &descAllocInfo, m_descriptorSets.data());
 
-        for (size_t i = 0; i < m_gpuTextures.size(); i++) {
-            VkDescriptorImageInfo imageInfo{};
-            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            imageInfo.imageView = m_gpuTextures[i].imageView;
-            imageInfo.sampler = m_gpuTextures[i].sampler;
+for (size_t i = 0; i < m_gpuTextures.size(); i++) {
+            VkDescriptorImageInfo diffuseInfo{};
+            diffuseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            diffuseInfo.imageView = m_gpuTextures[i].imageView;
+            diffuseInfo.sampler = m_gpuTextures[i].sampler;
 
-            VkWriteDescriptorSet descriptorWrite{};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = m_descriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.dstArrayElement = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pImageInfo = &imageInfo;
+            VkDescriptorImageInfo lightmapInfo{};
+            lightmapInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            lightmapInfo.imageView = m_lightmapAtlasTexture.imageView;
+            
+            // Note: Lightmaps traditionally use Linear filtering (VK_FILTER_LINEAR) to smooth out shadows
+            // Our CreateAndUploadImage hardcodes nearest right now.
+            lightmapInfo.sampler = m_lightmapAtlasTexture.sampler; 
 
-            vkUpdateDescriptorSets(m_vkbDevice.device, 1, &descriptorWrite, 0, nullptr);
+            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+            
+            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[0].dstSet = m_descriptorSets[i];
+            descriptorWrites[0].dstBinding = 0;
+            descriptorWrites[0].dstArrayElement = 0;
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[0].descriptorCount = 1;
+            descriptorWrites[0].pImageInfo = &diffuseInfo;
+
+            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[1].dstSet = m_descriptorSets[i];
+            descriptorWrites[1].dstBinding = 1; // Binding 1!
+            descriptorWrites[1].dstArrayElement = 0;
+            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[1].descriptorCount = 1;
+            descriptorWrites[1].pImageInfo = &lightmapInfo;
+
+            vkUpdateDescriptorSets(m_vkbDevice.device, 2, descriptorWrites.data(), 0, nullptr);
         }
     }
 }

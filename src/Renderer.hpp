@@ -38,6 +38,8 @@ private:
     Window* m_window;
     std::string m_exeDir;
 
+    engine::GpuImage m_lightmapAtlasTexture;
+
     // ========================================================================
     // Core Vulkan & VMA Handles
     // ========================================================================
