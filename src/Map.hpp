@@ -1,5 +1,6 @@
 #pragma once
 #include "BspFormat.hpp"
+#include "Entity.hpp"
 #include <vector>
 #include <cstddef>
 #include <span>
@@ -41,10 +42,16 @@ public:
     // Expose the extracted textures
     const std::vector<TextureData>& GetTextures() const { return m_textures; }
 
+    const std::vector<Entity>& GetEntities() const { return m_entities; }
+
 private:
     void ParseLumps(std::span<const std::byte> data);
     void ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette);
     void TriangulateFaces();
+
+    void ParseEntities(std::span<const std::byte> data);
+    
+    std::vector<Entity> m_entities;
 
     // Raw pointers mapped directly over the binary data (Zero-copy parsing!)
     const bsp::BspHeader* m_header = nullptr;
