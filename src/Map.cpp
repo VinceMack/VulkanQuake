@@ -30,6 +30,7 @@ Map::Map(std::span<const std::byte> bspData, std::span<const std::byte> paletteD
 
     ParseLumps(bspData);
     ParseTextures(bspData, paletteData);
+    ParseEntities(bspData);
     TriangulateFaces();
 }
 
@@ -84,6 +85,66 @@ void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::by
         }
     }
     std::cout << "Extracted " << numTextures << " textures from BSP.\n";
+}
+
+void Map::ParseEntities(std::span<const std::byte> data) {
+    const bsp::BspEntry& entEntry = m_header->lumps[bsp::LUMP_ENTITIES];
+    
+    // Safety check
+    if (entEntry.offset + entEntry.size > data.size()) return;
+
+    const char* start = reinterpret_cast<const char*>(data.data() + entEntry.offset);
+    const char* end = start + entEntry.size;
+
+    Entity* currentEntity = nullptr;
+
+    // Helper lambda to skip whitespace
+    auto skipWhitespace = [&]() {
+        while (start < end && std::isspace(static_cast<unsigned char>(*start))) {
+            start++;
+        }
+    };
+
+    // Helper lambda to read a quoted string
+    auto readString = [&]() -> std::string {
+        skipWhitespace();
+        if (start >= end || *start != '"') return "";
+        start++; // skip open quote
+        
+        const char* s = start;
+        while (start < end && *start != '"') start++;
+        
+        std::string res(s, start);
+        if (start < end && *start == '"') start++; // skip close quote
+        return res;
+    };
+
+    while (start < end) {
+        skipWhitespace();
+        if (start >= end || *start == '\0') break; // End of file or null terminator
+
+        if (*start == '{') {
+            m_entities.emplace_back();
+            currentEntity = &m_entities.back();
+            start++; // skip '{'
+        } else if (*start == '}') {
+            currentEntity = nullptr;
+            start++; // skip '}'
+        } else if (*start == '"') {
+            // We found a key-value pair!
+            std::string key = readString();
+            std::string value = readString();
+            
+            if (currentEntity && !key.empty()) {
+                currentEntity->AddProperty(key, value);
+            }
+        } else {
+            // Unexpected character (e.g., malformed map), just skip it to prevent infinite loops
+            start++;
+        }
+    }
+
+    std::cout << "Parsed " << m_entities.size() << " entities.\n";
 }
 
 void Map::TriangulateFaces() {
