@@ -43,6 +43,8 @@ find_program(GLSLC glslc REQUIRED)
 set(SHADER_FILES 
     shaders/mesh.vert 
     shaders/mesh.frag
+    shaders/model.vert
+    shaders/model.frag
 )
 
 set(SPIRV_FILES "")
@@ -67,7 +69,10 @@ add_custom_target(CompileShaders DEPENDS ${SPIRV_FILES})
 
 # Add your engine files
 add_executable(VulkanQuake
+    src/AliasModel.cpp
+    src/AliasModel.hpp
     src/bspFormat.hpp
+    src/MdlFormat.hpp
     src/Camera.cpp
     src/Camera.hpp
     src/Engine.cpp

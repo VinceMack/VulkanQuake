@@ -6,6 +6,7 @@
 #include "GpuImage.hpp"
 #include "PipelineSetup.hpp"
 #include "RenderEntity.hpp"
+#include "AliasModel.hpp"
 
 #include <vulkan/vulkan.h>
 #include <VkBootstrap.h>
@@ -26,6 +27,9 @@ public:
 
     // Uploads map geometry and textures to VRAM, and builds Descriptor Sets
     void UploadMap(const Map& map);
+    
+    // Returns an ID we can use to spawn it
+    uint32_t UploadAliasModel(const AliasModel& model);
     
     // The main Render Loop execution
     void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities);
@@ -91,6 +95,30 @@ private:
     std::vector<VkSemaphore> m_renderFinishedSemaphores;
     std::vector<VkFence> m_inFlightFences;
     std::vector<VkCommandBuffer> m_commandBuffers;
+
+    struct ModelPushConstants {
+        glm::mat4 renderMatrix;
+        float interp;
+    };
+
+    struct GpuAliasModel {
+        engine::GpuBuffer vertexBuffer;
+        engine::GpuBuffer indexBuffer;
+        engine::GpuImage texture;
+        VkDescriptorSet descriptorSet;
+        uint32_t indexCount;
+        uint32_t verticesPerFrame; // <--- NEW
+        uint32_t numFrames;        // <--- NEW
+    };
+
+    VkDescriptorSetLayout m_modelDescriptorLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_modelDescriptorPool = VK_NULL_HANDLE;
+    VkPipelineLayout m_modelPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline m_modelPipeline = VK_NULL_HANDLE;
+    VkShaderModule m_modelVertShader = VK_NULL_HANDLE;
+    VkShaderModule m_modelFragShader = VK_NULL_HANDLE;
+    
+    std::vector<GpuAliasModel> m_gpuAliasModels; // Stores our uploaded models
 };
 
 } // namespace engine

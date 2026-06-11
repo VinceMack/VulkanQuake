@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include "AliasModel.hpp"
 #include "VirtualFileSystem.hpp"
 #include <iostream>
 #include <filesystem>
@@ -78,6 +79,8 @@ void Engine::Init() {
     auto paletteData = vfs.ReadFile("gfx/palette.lmp");
     auto mapData = vfs.ReadFile("maps/e1m1.bsp");
 
+
+
     if (mapData && paletteData) {
         m_map = std::make_unique<Map>(std::move(*mapData), *paletteData);
         // Hand the map over to the Renderer so it can upload everything to VRAM
@@ -106,6 +109,7 @@ void Engine::Init() {
             if (!modelStr.empty() && modelStr[0] == '*') {
                 RenderEntity rent;
                 rent.modelId = std::stoi(modelStr.substr(1));
+                rent.type = EntityModelType::BspBrush;
                 rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
                 
                 // rush entities are already rotated correctly in the BSP vertex data.
@@ -127,6 +131,32 @@ void Engine::Init() {
         } else {
             std::cerr << "WARNING: No info_player_start found. Spawning at 0,0,0.\n";
         }
+
+    // Change "armor.mdl" to "shambler.mdl"
+    auto monsterData = vfs.ReadFile("progs/shambler.mdl");
+    if (monsterData && paletteData) {
+        engine::AliasModel monster(*monsterData, *paletteData);
+        uint32_t monsterId = m_renderer->UploadAliasModel(monster);
+
+        float angleRad = glm::radians(spawnAngle);
+        glm::vec3 forwardDir(std::cos(angleRad), std::sin(angleRad), 0.0f);
+        
+        RenderEntity monsterEnt;
+        monsterEnt.type = EntityModelType::Alias;
+        monsterEnt.modelId = monsterId;
+        // Spawn him further away, he's huge!
+        monsterEnt.origin = spawnOrigin + (forwardDir * 200.0f) + glm::vec3(0.0f, 0.0f, -22.0f); 
+        
+        // Face him towards the player
+        monsterEnt.angles = glm::vec3(0.0f, spawnAngle + 180.0f, 0.0f); 
+        
+        monsterEnt.frame = 0;
+        monsterEnt.nextFrame = 1;
+        monsterEnt.interp = 0.0f;
+        
+        m_renderEntities.push_back(monsterEnt);
+        std::cout << "Successfully uploaded and spawned shambler.mdl!\n";
+    }
 
     m_isRunning = true;
 }
@@ -161,6 +191,24 @@ void Engine::MainLoop() {
         if (keys[SDL_SCANCODE_A]) moveRight -= 1.0f;
         
         m_camera->ProcessKeyboard(moveForward, moveRight, deltaTime);
+
+        // ========================================================================
+        // ---> NEW: Entity Simulation (The Game Tick)
+        // ========================================================================
+        float animationSpeed = 10.0f; // 10 FPS
+        for (auto& rent : m_renderEntities) {
+            if (rent.type == EntityModelType::Alias) {
+                // Animate the Shambler!
+                rent.interp += animationSpeed * deltaTime;
+                if (rent.interp >= 1.0f) {
+                    rent.interp -= 1.0f;
+                    rent.frame = rent.nextFrame;
+                    rent.nextFrame = rent.frame + 1;
+                    // Note: We clamp this inside DrawFrame so it loops perfectly!
+                }
+            }
+        }
+        // <--- END NEW
 
         // 4. Render
         m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities);

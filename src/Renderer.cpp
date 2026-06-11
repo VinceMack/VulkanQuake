@@ -45,6 +45,10 @@ Renderer::~Renderer() {
     }
     vkDestroyPipeline(m_vkbDevice.device, m_graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(m_vkbDevice.device, m_pipelineLayout, nullptr);
+    vkDestroyPipeline(m_vkbDevice.device, m_modelPipeline, nullptr);
+    vkDestroyPipelineLayout(m_vkbDevice.device, m_modelPipelineLayout, nullptr);
+    vkDestroyDescriptorSetLayout(m_vkbDevice.device, m_modelDescriptorLayout, nullptr);
+    if (m_modelDescriptorPool) vkDestroyDescriptorPool(m_vkbDevice.device, m_modelDescriptorPool, nullptr);
     vkDestroyRenderPass(m_vkbDevice.device, m_renderPass, nullptr);
     
     // 3. Destroy Command Pool (This frees all Command Buffers and their references)
@@ -64,6 +68,11 @@ Renderer::~Renderer() {
     }
     for (auto& tex : m_gpuTextures) tex.Destroy();
     m_lightmapAtlasTexture.Destroy(); // Safely destroy the Atlas here!
+    for (auto& mdl : m_gpuAliasModels) {
+        mdl.vertexBuffer.Destroy();
+        mdl.indexBuffer.Destroy();
+        mdl.texture.Destroy();
+    }
 
     // 6. Destroy Sync Primitives & Swapchain
     for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
@@ -78,6 +87,8 @@ Renderer::~Renderer() {
     if (m_allocator) vmaDestroyAllocator(m_allocator);
     vkDestroyShaderModule(m_vkbDevice.device, m_vertShader, nullptr);
     vkDestroyShaderModule(m_vkbDevice.device, m_fragShader, nullptr);
+    vkDestroyShaderModule(m_vkbDevice.device, m_modelVertShader, nullptr);
+    vkDestroyShaderModule(m_vkbDevice.device, m_modelFragShader, nullptr);
     
     vkb::destroy_device(m_vkbDevice);
     vkDestroySurfaceKHR(m_vkbInst.instance, m_surface, nullptr);
@@ -149,12 +160,36 @@ void Renderer::InitPipeline() {
     m_vertShader = engine::Shader::LoadModule(m_vkbDevice.device, vertPath);
     m_fragShader = engine::Shader::LoadModule(m_vkbDevice.device, fragPath);
 
+    std::string mdlVertPath = find_shader_directory("model.vert.spv", m_exeDir).string();
+    std::string mdlFragPath = find_shader_directory("model.frag.spv", m_exeDir).string();
+    m_modelVertShader = engine::Shader::LoadModule(m_vkbDevice.device, mdlVertPath);
+    m_modelFragShader = engine::Shader::LoadModule(m_vkbDevice.device, mdlFragPath);
+
     m_descriptorSetLayout = engine::PipelineSetup::CreateDescriptorSetLayout(m_vkbDevice.device);
     m_depthBuffer = engine::PipelineSetup::CreateDepthBuffer(m_vkbDevice.device, m_allocator, m_swapchainExtent);
     m_renderPass = engine::PipelineSetup::CreateRenderPass(m_vkbDevice.device, m_swapchainFormat);
     m_framebuffers = engine::PipelineSetup::CreateFramebuffers(m_vkbDevice.device, m_renderPass, m_swapchainExtent, m_swapchainImageViews, m_depthBuffer.view);
     m_pipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_descriptorSetLayout);
     m_graphicsPipeline = engine::PipelineSetup::CreateGraphicsPipeline(m_vkbDevice.device, m_renderPass, m_pipelineLayout, m_vertShader, m_fragShader, m_swapchainExtent);
+
+    m_modelDescriptorLayout = engine::PipelineSetup::CreateSingleTextureDescriptorLayout(m_vkbDevice.device);
+    m_modelPipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_modelDescriptorLayout, sizeof(ModelPushConstants));
+    m_modelPipeline = engine::PipelineSetup::CreateModelGraphicsPipeline(
+        m_vkbDevice.device, m_renderPass, m_modelPipelineLayout, m_modelVertShader, m_modelFragShader, m_swapchainExtent);
+
+    // Create descriptor pool for alias models (up to 128 models)
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = 128;
+
+    VkDescriptorPoolCreateInfo descPoolInfo{};
+    descPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    descPoolInfo.poolSizeCount = 1;
+    descPoolInfo.pPoolSizes = &poolSize;
+    descPoolInfo.maxSets = 128;
+    if (vkCreateDescriptorPool(m_vkbDevice.device, &descPoolInfo, nullptr, &m_modelDescriptorPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create model descriptor pool");
+    }
 }
 
 void Renderer::InitSyncStructures() {
@@ -269,6 +304,49 @@ for (size_t i = 0; i < m_gpuTextures.size(); i++) {
     }
 }
 
+uint32_t Renderer::UploadAliasModel(const AliasModel& model) {
+    engine::VulkanContext vkCtx = { m_vkbDevice.device, m_allocator, m_graphicsQueue, m_commandPool };
+    GpuAliasModel gpuModel;
+
+    auto vertSpan = std::span(reinterpret_cast<const std::byte*>(model.GetVertices().data()), model.GetVertices().size() * sizeof(engine::ModelVertex));
+    auto indSpan = std::span(reinterpret_cast<const std::byte*>(model.GetIndices().data()), model.GetIndices().size() * sizeof(uint32_t));
+
+    gpuModel.vertexBuffer = engine::CreateAndUploadBuffer(vkCtx, vertSpan, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    gpuModel.indexBuffer = engine::CreateAndUploadBuffer(vkCtx, indSpan, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+    gpuModel.texture = engine::CreateAndUploadImage(vkCtx, model.GetTexture());
+    gpuModel.indexCount = static_cast<uint32_t>(model.GetIndices().size());
+
+    // Allocate Descriptor Set
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = m_modelDescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_modelDescriptorLayout;
+    vkAllocateDescriptorSets(m_vkbDevice.device, &allocInfo, &gpuModel.descriptorSet);
+
+    // Bind Image to Descriptor Set
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = gpuModel.texture.imageView;
+    imageInfo.sampler = gpuModel.texture.sampler;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = gpuModel.descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_vkbDevice.device, 1, &descriptorWrite, 0, nullptr);
+
+    gpuModel.verticesPerFrame = model.GetVerticesPerFrame();
+    gpuModel.numFrames = model.GetNumFrames();
+
+    m_gpuAliasModels.push_back(std::move(gpuModel));
+    return static_cast<uint32_t>(m_gpuAliasModels.size() - 1);
+}
+
 void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
@@ -334,6 +412,7 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
 
     // ---> NEW: Draw Dynamic Brush Entities (Doors, platforms)
     for (const auto& rent : renderEntities) {
+        if (rent.type != EntityModelType::BspBrush) continue;
         if (rent.modelId == 0) continue; // Model 0 was already drawn by the PVS pass!
 
         const SubModel& subModel = map.GetSubModel(rent.modelId);
@@ -350,6 +429,39 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
+    }
+
+    // ---> NEW: Draw Alias Models
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipeline);
+
+    for (const auto& rent : renderEntities) {
+        if (rent.type != EntityModelType::Alias) continue;
+        if (rent.modelId >= m_gpuAliasModels.size()) continue;
+
+        const auto& gpuModel = m_gpuAliasModels[rent.modelId];
+
+        // Safety clamp the frames
+        uint32_t frameA = rent.frame % gpuModel.numFrames;
+        uint32_t frameB = rent.nextFrame % gpuModel.numFrames;
+
+        // The Magic Zero-Cost Binding: We bind the SAME buffer twice, but with different byte offsets!
+        VkBuffer vBuffers[] = { gpuModel.vertexBuffer.buffer, gpuModel.vertexBuffer.buffer };
+        VkDeviceSize vOffsets[] = { 
+            frameA * gpuModel.verticesPerFrame * sizeof(engine::ModelVertex),
+            frameB * gpuModel.verticesPerFrame * sizeof(engine::ModelVertex)
+        };
+        
+        vkCmdBindVertexBuffers(cmd, 0, 2, vBuffers, vOffsets);
+        vkCmdBindIndexBuffer(cmd, gpuModel.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        ModelPushConstants pc;
+        pc.renderMatrix = proj * view * rent.GetTransformMatrix();
+        pc.interp = rent.interp;
+        
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &gpuModel.descriptorSet, 0, nullptr);
+        vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
     }
 
     vkCmdEndRenderPass(cmd);
