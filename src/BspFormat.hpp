@@ -36,6 +36,31 @@ struct BspFace {
     int32_t  lightmap_offset;
 };
 
+struct BspPlane {
+    float normal[3];
+    float dist;
+    int32_t type;
+};
+
+struct BspNode {
+    uint32_t plane_id;
+    int16_t children[2]; // If negative, it's a leaf index: leaf = ~child
+    int16_t mins[3];
+    int16_t maxs[3];
+    uint16_t first_face;
+    uint16_t num_faces;
+};
+
+struct BspLeaf {
+    int32_t contents;
+    int32_t visofs;      // -1 means no visibility data
+    int16_t mins[3];
+    int16_t maxs[3];
+    uint16_t first_marksurface;
+    uint16_t num_marksurfaces;
+    uint8_t ambient_level[4];
+};
+
 #pragma pack(pop)
 
 struct BspTexInfo {

@@ -31,47 +31,64 @@ struct RenderBatch {
     uint32_t indexCount;
 };
 
+struct FaceData {
+    uint32_t textureId;
+    uint32_t firstIndex;
+    uint32_t indexCount;
+};
+
 class Map {
 public:
-    // Takes the raw byte buffer loaded by the VirtualFileSystem
-    Map(std::span<const std::byte> bspData, std::span<const std::byte> paletteData);
-    const std::vector<RenderBatch>& GetRenderBatches() const { return m_renderBatches; }
-    const std::vector<RenderVertex>& GetVertices() const { return m_renderVertices; }
-    const std::vector<uint32_t>& GetIndices() const { return m_renderIndices; }
-    // Expose the extracted textures
-    const std::vector<TextureData>& GetTextures() const { return m_textures; }
-    const std::vector<Entity>& GetEntities() const { return m_entities; }
-    const TextureData& GetLightmapAtlas() const { return m_lightmapAtlas; }
+    Map(std::vector<std::byte> bspData, std::span<const std::byte> paletteData);
 
+    const std::vector<RenderVertex>& GetVertices() const { return m_renderVertices; }
+    const std::vector<TextureData>& GetTextures() const { return m_textures; }
+    const TextureData& GetLightmapAtlas() const { return m_lightmapAtlas; }
     const std::vector<Entity>& GetEntities() const { return m_entities; }
+
+    uint32_t GetMaxIndexCount() const { return static_cast<uint32_t>(m_masterIndices.size()); }
+
+    // ---> NEW: Dynamic PVS querying
+    // Takes the camera position and populates the output arrays with only visible geometry
+    void BuildVisibleBatches(const glm::vec3& cameraPos, 
+                             std::vector<uint32_t>& outIndices, 
+                             std::vector<RenderBatch>& outBatches) const;
 
 private:
     void ParseLumps(std::span<const std::byte> data);
     void ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette);
-    void TriangulateFaces();
     void ParseEntities(std::span<const std::byte> data);
+    void TriangulateFaces();
 
-    std::span<const uint8_t> m_bspLighting;
+    // ---> NEW: PVS Math Helpers
+    int FindCameraLeaf(const glm::vec3& cameraPos) const;
+    std::vector<uint8_t> DecompressPVS(int leafIndex) const;
+    bool CheckBit(const std::vector<uint8_t>& pvs, int leafIndex) const;
+
+    const bsp::BspHeader* m_header = nullptr;
+    std::span<const bsp::BspVertex>  m_bspVertices;
+    std::span<const bsp::BspEdge>    m_bspEdges;
+    std::span<const int32_t>         m_bspSurfedges;
+    std::span<const bsp::BspFace>    m_bspFaces;
+    std::span<const bsp::BspTexInfo> m_bspTexInfos;
+    std::span<const uint8_t>         m_bspLighting;
+    std::vector<std::byte> m_bspRawData;
+    
+    // Span maps for the tree traversal lumps
+    std::span<const bsp::BspPlane>   m_bspPlanes;
+    std::span<const bsp::BspNode>    m_bspNodes;
+    std::span<const bsp::BspLeaf>    m_bspLeaves;
+    std::span<const uint8_t>         m_bspVisibility;
+    std::span<const uint16_t>        m_bspMarkSurfaces;
+
+    std::vector<RenderVertex> m_renderVertices;
+    std::vector<TextureData>  m_textures;
     TextureData m_lightmapAtlas;
     std::vector<Entity> m_entities;
 
-    void ParseEntities(std::span<const std::byte> data);
-    
-    std::vector<Entity> m_entities;
-
-    // Raw pointers mapped directly over the binary data (Zero-copy parsing!)
-    const bsp::BspHeader* m_header = nullptr;
-    std::span<const bsp::BspVertex> m_bspVertices;
-    std::span<const bsp::BspEdge>   m_bspEdges;
-    std::span<const int32_t>        m_bspSurfedges;
-    std::span<const bsp::BspFace>   m_bspFaces;
-    std::span<const bsp::BspTexInfo> m_bspTexInfos;
-
-    // Converted Vulkan-ready data
-    std::vector<RenderBatch>  m_renderBatches;
-    std::vector<RenderVertex> m_renderVertices;
-    std::vector<uint32_t>     m_renderIndices;
-    std::vector<TextureData>  m_textures;
+    // Master Index storage
+    std::vector<uint32_t> m_masterIndices;
+    std::vector<FaceData> m_faceData;
 };
 
 } // namespace engine

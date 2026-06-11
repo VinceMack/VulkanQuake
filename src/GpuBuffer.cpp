@@ -90,4 +90,31 @@ GpuBuffer CreateAndUploadBuffer(const VulkanContext& ctx, std::span<const std::b
     return finalBuffer;
 }
 
+GpuBuffer CreateDynamicBuffer(const VulkanContext& ctx, size_t size, VkBufferUsageFlags usage) {
+    VkBufferCreateInfo bufferInfo = {};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = size;
+    bufferInfo.usage = usage;
+
+    VmaAllocationCreateInfo allocInfo = {};
+    allocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+    // Tell VMA we want to write to it sequentially from the CPU, and keep it mapped permanently
+    allocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                      VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    GpuBuffer finalBuffer;
+    finalBuffer.allocator = ctx.allocator;
+    finalBuffer.size = size;
+
+    VmaAllocationInfo allocMeta;
+    if (vmaCreateBuffer(ctx.allocator, &bufferInfo, &allocInfo, 
+                        &finalBuffer.buffer, &finalBuffer.allocation, &allocMeta) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create dynamic GPU buffer");
+    }
+
+    // Save the memory pointer so we can memcpy to it later
+    finalBuffer.mappedData = allocMeta.pMappedData; 
+    return finalBuffer;
+}
+
 } // namespace engine

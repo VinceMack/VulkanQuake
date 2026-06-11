@@ -59,7 +59,9 @@ Renderer::~Renderer() {
     vmaDestroyImage(m_allocator, m_depthBuffer.image, m_depthBuffer.allocation);
 
     m_vertexBuffer.Destroy();
-    m_indexBuffer.Destroy();
+    for (auto& buffer : m_dynamicIndexBuffers) {
+        buffer.Destroy();
+    }
     for (auto& tex : m_gpuTextures) tex.Destroy();
     m_lightmapAtlasTexture.Destroy(); // Safely destroy the Atlas here!
 
@@ -186,15 +188,20 @@ void Renderer::UploadMap(const Map& map) {
     engine::VulkanContext vkCtx = { m_vkbDevice.device, m_allocator, m_graphicsQueue, m_commandPool };
 
     auto verticesSpan = std::span(reinterpret_cast<const std::byte*>(map.GetVertices().data()), map.GetVertices().size() * sizeof(engine::RenderVertex));
-    auto indicesSpan = std::span(reinterpret_cast<const std::byte*>(map.GetIndices().data()), map.GetIndices().size() * sizeof(uint32_t));
 
     m_vertexBuffer = engine::CreateAndUploadBuffer(vkCtx, verticesSpan, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-    m_indexBuffer = engine::CreateAndUploadBuffer(vkCtx, indicesSpan, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 
     for (const auto& texData : map.GetTextures()) {
         m_gpuTextures.push_back(engine::CreateAndUploadImage(vkCtx, texData));
     }
-    m_renderBatches = map.GetRenderBatches();
+    
+    std::cout << "Allocating Dynamic Index Buffers...\n";
+    size_t indexBufferSize = map.GetMaxIndexCount() * sizeof(uint32_t);
+    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
+        m_dynamicIndexBuffers.push_back(
+            engine::CreateDynamicBuffer(vkCtx, indexBufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
+        );
+    }
     m_lightmapAtlasTexture = engine::CreateAndUploadImage(vkCtx, map.GetLightmapAtlas());
 
     // Descriptor Sets for Textures
@@ -258,12 +265,26 @@ for (size_t i = 0; i < m_gpuTextures.size(); i++) {
     }
 }
 
-void Renderer::DrawFrame(const Camera& camera) {
+void Renderer::DrawFrame(const Camera& camera, const Map& map) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
+    // ---> NEW: PVS CULLING HAPPENS HERE!
+    std::vector<uint32_t> visibleIndices;
+    std::vector<RenderBatch> visibleBatches;
+    map.BuildVisibleBatches(camera.GetPosition(), visibleIndices, visibleBatches);
+
+    // Copy the visible indices to this specific frame's dynamic buffer
+    if (!visibleIndices.empty()) {
+        memcpy(m_dynamicIndexBuffers[m_currentFrame].mappedData, 
+               visibleIndices.data(), 
+               visibleIndices.size() * sizeof(uint32_t));
+    }
+    // <--- END NEW
+
     uint32_t imageIndex;
-    vkAcquireNextImageKHR(m_vkbDevice.device, m_vkbSwapchain.swapchain, UINT64_MAX, m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
+    vkAcquireNextImageKHR(m_vkbDevice.device, m_vkbSwapchain.swapchain, UINT64_MAX, 
+                          m_imageAvailableSemaphores[m_currentFrame], VK_NULL_HANDLE, &imageIndex);
 
     VkCommandBuffer cmd = m_commandBuffers[m_currentFrame];
     vkResetCommandBuffer(cmd, 0);
@@ -291,7 +312,9 @@ void Renderer::DrawFrame(const Camera& camera) {
     VkBuffer vertexBuffers[] = { m_vertexBuffer.buffer };
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
-    vkCmdBindIndexBuffer(cmd, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    
+    // ---> NEW: Bind the dynamic index buffer for THIS frame
+    vkCmdBindIndexBuffer(cmd, m_dynamicIndexBuffers[m_currentFrame].buffer, 0, VK_INDEX_TYPE_UINT32);
 
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 proj = glm::perspective(glm::radians(75.0f), (float)m_swapchainExtent.width / (float)m_swapchainExtent.height, 0.1f, 10000.0f);
@@ -299,7 +322,8 @@ void Renderer::DrawFrame(const Camera& camera) {
     glm::mat4 mvp = proj * view;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
 
-    for (const auto& batch : m_renderBatches) {
+    // ---> NEW: Use the dynamically built batches
+    for (const auto& batch : visibleBatches) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
         vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
     }

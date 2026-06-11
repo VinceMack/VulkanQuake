@@ -27,7 +27,7 @@ public:
     void UploadMap(const Map& map);
     
     // The main Render Loop execution
-    void DrawFrame(const Camera& camera);
+    void DrawFrame(const Camera& camera, const Map& map);
 
 private:
     void InitVulkan();
@@ -78,9 +78,8 @@ private:
     // Map GPU Data
     // ========================================================================
     engine::GpuBuffer m_vertexBuffer;
-    engine::GpuBuffer m_indexBuffer;
     std::vector<engine::GpuImage> m_gpuTextures;
-    std::vector<engine::RenderBatch> m_renderBatches;
+    std::vector<engine::GpuBuffer> m_dynamicIndexBuffers;
 
     // ========================================================================
     // Synchronization & Frames in Flight

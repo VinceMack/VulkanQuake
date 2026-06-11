@@ -14,35 +14,44 @@ std::span<const T> GetLump(std::span<const std::byte> data, const bsp::BspEntry&
     return std::span<const T>(ptr, count);
 }
 
-Map::Map(std::span<const std::byte> bspData, std::span<const std::byte> paletteData) {
-    if (bspData.size() < sizeof(bsp::BspHeader)) {
+Map::Map(std::vector<std::byte> bspData, std::span<const std::byte> paletteData) 
+    : m_bspRawData(std::move(bspData)) // Move the data into the class
+{
+    if (m_bspRawData.size() < sizeof(bsp::BspHeader)) {
         throw std::runtime_error("File too small to be a BSP");
     }
     if (paletteData.size() < 768) {
         throw std::runtime_error("Invalid palette file (must be at least 768 bytes)");
     }
 
-    m_header = reinterpret_cast<const bsp::BspHeader*>(bspData.data());
+    // Point the header at our owned memory
+    m_header = reinterpret_cast<const bsp::BspHeader*>(m_bspRawData.data());
 
     if (m_header->version != bsp::BSP_VERSION) {
         throw std::runtime_error("Unsupported BSP version (expected 29)");
     }
 
-    ParseLumps(bspData);
-    ParseTextures(bspData, paletteData);
-    ParseEntities(bspData);
+    // Pass the owned memory to the lump parser
+    ParseLumps(m_bspRawData);
+    ParseTextures(m_bspRawData, paletteData);
+    ParseEntities(m_bspRawData);
     TriangulateFaces();
 }
 
 void Map::ParseLumps(std::span<const std::byte> data) {
-    m_bspVertices  = GetLump<bsp::BspVertex>(data,  m_header->lumps[bsp::LUMP_VERTICES]);
-    m_bspEdges     = GetLump<bsp::BspEdge>(data,    m_header->lumps[bsp::LUMP_EDGES]);
-    m_bspSurfedges = GetLump<int32_t>(data,         m_header->lumps[bsp::LUMP_SURFEDGES]);
-    m_bspFaces     = GetLump<bsp::BspFace>(data,    m_header->lumps[bsp::LUMP_FACES]);
+    m_bspVertices  = GetLump<bsp::BspVertex>(data, m_header->lumps[bsp::LUMP_VERTICES]);
+    m_bspEdges     = GetLump<bsp::BspEdge>(data,   m_header->lumps[bsp::LUMP_EDGES]);
+    m_bspSurfedges = GetLump<int32_t>(data,        m_header->lumps[bsp::LUMP_SURFEDGES]);
+    m_bspFaces     = GetLump<bsp::BspFace>(data,   m_header->lumps[bsp::LUMP_FACES]);
     m_bspTexInfos  = GetLump<bsp::BspTexInfo>(data, m_header->lumps[bsp::LUMP_TEXINFO]);
-    m_bspLighting  = GetLump<uint8_t>(data,         m_header->lumps[bsp::LUMP_LIGHTING]);
+    m_bspLighting  = GetLump<uint8_t>(data, m_header->lumps[bsp::LUMP_LIGHTING]);
 
-    std::cout << "Parsed BSP with " << m_bspFaces.size() << " faces.\n";
+    // ---> NEW PVS LUMPS
+    m_bspPlanes       = GetLump<bsp::BspPlane>(data, m_header->lumps[bsp::LUMP_PLANES]);
+    m_bspNodes        = GetLump<bsp::BspNode>(data, m_header->lumps[bsp::LUMP_NODES]);
+    m_bspLeaves       = GetLump<bsp::BspLeaf>(data, m_header->lumps[bsp::LUMP_LEAVES]);
+    m_bspVisibility   = GetLump<uint8_t>(data, m_header->lumps[bsp::LUMP_VISIBILITY]);
+    m_bspMarkSurfaces = GetLump<uint16_t>(data, m_header->lumps[bsp::LUMP_MARKSURFACES]);
 }
 
 void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette) {
@@ -150,11 +159,8 @@ void Map::ParseEntities(std::span<const std::byte> data) {
 
 void Map::TriangulateFaces() {
     m_renderVertices.clear();
-    m_renderIndices.clear();
-    m_renderBatches.clear();
-
-    // Create a bucket for every texture
-    std::vector<std::vector<uint32_t>> indicesByTexture(m_textures.size());
+    m_masterIndices.clear();
+    m_faceData.clear();
 
     // --- LIGHTMAP ATLAS SETUP ---
     m_lightmapAtlas.name = "LightmapAtlas";
@@ -274,26 +280,125 @@ void Map::TriangulateFaces() {
             faceIndices.push_back(m_renderVertices.size() - 1);
         }
 
-        // Drop the triangulated indices directly into the correct Texture Bucket
+        // Drop the triangulated indices directly into the Master Array, and record where they are
+        FaceData fd;
+        fd.textureId = texID;
+        fd.firstIndex = static_cast<uint32_t>(m_masterIndices.size());
+        
         for (size_t i = 1; i < faceIndices.size() - 1; ++i) {
-            indicesByTexture[texID].push_back(faceIndices[0]);
-            indicesByTexture[texID].push_back(faceIndices[i]);
-            indicesByTexture[texID].push_back(faceIndices[i + 1]);
+            m_masterIndices.push_back(faceIndices[0]);
+            m_masterIndices.push_back(faceIndices[i]);
+            m_masterIndices.push_back(faceIndices[i + 1]);
+        }
+        
+        fd.indexCount = static_cast<uint32_t>(m_masterIndices.size()) - fd.firstIndex;
+        m_faceData.push_back(fd);
+    }
+    std::cout << "Packed Lightmaps into Atlas. Max Y used: " << (atlasY + atlasRowHeight) << " / 1024\n";
+    std::cout << "Triangulated map into " << (m_masterIndices.size() / 3) << " unique Vulkan triangles.\n";
+} // End of TriangulateFaces
+
+int Map::FindCameraLeaf(const glm::vec3& cameraPos) const {
+    int nodeIndex = 0;
+
+    // Walk the BSP tree
+    while (nodeIndex >= 0) {
+        const auto& node = m_bspNodes[nodeIndex];
+        const auto& plane = m_bspPlanes[node.plane_id];
+
+        // Dot product to find which side of the splitting plane we are on
+        float distance = glm::dot(cameraPos, glm::vec3(plane.normal[0], plane.normal[1], plane.normal[2])) - plane.dist;
+
+        if (distance >= 0) {
+            nodeIndex = node.children[0]; // Front child
+        } else {
+            nodeIndex = node.children[1]; // Back child
         }
     }
 
-    // Now, sequentialize the buckets into our final index buffer and record the batches
-    for (uint32_t t = 0; t < indicesByTexture.size(); ++t) {
-        if (indicesByTexture[t].empty()) continue;
-        RenderBatch batch;
-        batch.textureId = t;
-        batch.firstIndex = static_cast<uint32_t>(m_renderIndices.size());
-        batch.indexCount = static_cast<uint32_t>(indicesByTexture[t].size());
-        m_renderBatches.push_back(batch);
-        m_renderIndices.insert(m_renderIndices.end(), indicesByTexture[t].begin(), indicesByTexture[t].end());
+    // Quake uses bitwise NOT to signify a leaf index
+    return ~nodeIndex;
+}
+
+std::vector<uint8_t> Map::DecompressPVS(int leafIndex) const {
+    size_t numLeaves = m_bspLeaves.size();
+    std::vector<uint8_t> pvs((numLeaves + 7) / 8, 0);
+
+    // If outside the map, or leaf has no vis data, return all 1s (Draw everything)
+    if (leafIndex < 0 || leafIndex >= numLeaves || m_bspLeaves[leafIndex].visofs == -1) {
+        std::fill(pvs.begin(), pvs.end(), 0xFF);
+        return pvs;
     }
 
-    std::cout << "Packed Lightmaps into Atlas. Max Y used: " << (atlasY + atlasRowHeight) << " / 1024\n";
+    const uint8_t* v = m_bspVisibility.data() + m_bspLeaves[leafIndex].visofs;
+    int c_out = 0;
+
+    // Run-length decode
+    while (c_out < pvs.size()) {
+        if (*v == 0) {
+            int numZeroBytes = v[1];
+            c_out += numZeroBytes;
+            v += 2;
+        } else {
+            pvs[c_out++] = *v++;
+        }
+    }
+    return pvs;
+}
+
+bool Map::CheckBit(const std::vector<uint8_t>& pvs, int leafIndex) const {
+    // Leaf 0 is a dummy leaf (solid world), PVS starts indexing at Leaf 1!
+    if (leafIndex == 0) return false;
+    int byteIndex = (leafIndex - 1) / 8;
+    int bitIndex = (leafIndex - 1) % 8;
+    return (pvs[byteIndex] & (1 << bitIndex)) != 0;
+}
+
+void Map::BuildVisibleBatches(const glm::vec3& cameraPos, std::vector<uint32_t>& outIndices, std::vector<RenderBatch>& outBatches) const {
+    outIndices.clear();
+    outBatches.clear();
+
+    int cameraLeaf = FindCameraLeaf(cameraPos);
+    std::vector<uint8_t> pvs = DecompressPVS(cameraLeaf);
+
+    std::vector<bool> faceVisible(m_bspFaces.size(), false);
+
+    // Find all visible faces
+    for (size_t leafIdx = 1; leafIdx < m_bspLeaves.size(); ++leafIdx) {
+        if (!CheckBit(pvs, leafIdx)) continue; // Culled!
+
+        const auto& leaf = m_bspLeaves[leafIdx];
+        for (int i = 0; i < leaf.num_marksurfaces; ++i) {
+            uint16_t faceIndex = m_bspMarkSurfaces[leaf.first_marksurface + i];
+            faceVisible[faceIndex] = true;
+        }
+    }
+
+    // Sort visible faces by TextureID to minimize draw calls
+    std::vector<std::vector<uint32_t>> indicesByTexture(m_textures.size());
+
+    for (size_t i = 0; i < faceVisible.size(); ++i) {
+        if (faceVisible[i]) {
+            const FaceData& fd = m_faceData[i];
+            
+            // Fast copy of this face's indices into its texture bucket
+            const uint32_t* src = m_masterIndices.data() + fd.firstIndex;
+            indicesByTexture[fd.textureId].insert(indicesByTexture[fd.textureId].end(), src, src + fd.indexCount);
+        }
+    }
+
+    // Build the final flat arrays for the GPU
+    for (uint32_t t = 0; t < indicesByTexture.size(); ++t) {
+        if (indicesByTexture[t].empty()) continue;
+
+        RenderBatch batch;
+        batch.textureId = t;
+        batch.firstIndex = static_cast<uint32_t>(outIndices.size());
+        batch.indexCount = static_cast<uint32_t>(indicesByTexture[t].size());
+        
+        outBatches.push_back(batch);
+        outIndices.insert(outIndices.end(), indicesByTexture[t].begin(), indicesByTexture[t].end());
+    }
 }
 
 } // namespace engine

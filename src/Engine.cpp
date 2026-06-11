@@ -79,7 +79,7 @@ void Engine::Init() {
     auto mapData = vfs.ReadFile("maps/e1m1.bsp");
 
     if (mapData && paletteData) {
-        m_map = std::make_unique<Map>(*mapData, *paletteData);
+        m_map = std::make_unique<Map>(std::move(*mapData), *paletteData);
         // Hand the map over to the Renderer so it can upload everything to VRAM
         m_renderer->UploadMap(*m_map);
     } else {
@@ -145,7 +145,7 @@ void Engine::MainLoop() {
         m_camera->ProcessKeyboard(moveForward, moveRight, deltaTime);
 
         // 4. Render
-        m_renderer->DrawFrame(*m_camera);
+        m_renderer->DrawFrame(*m_camera, *m_map);
     }
 }
 
