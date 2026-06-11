@@ -46,7 +46,7 @@ void Map::ParseLumps(std::span<const std::byte> data) {
     m_bspTexInfos  = GetLump<bsp::BspTexInfo>(data, m_header->lumps[bsp::LUMP_TEXINFO]);
     m_bspLighting  = GetLump<uint8_t>(data, m_header->lumps[bsp::LUMP_LIGHTING]);
 
-    // ---> NEW PVS LUMPS
+    // PVS LUMPS
     m_bspPlanes       = GetLump<bsp::BspPlane>(data, m_header->lumps[bsp::LUMP_PLANES]);
     m_bspNodes        = GetLump<bsp::BspNode>(data, m_header->lumps[bsp::LUMP_NODES]);
     m_bspLeaves       = GetLump<bsp::BspLeaf>(data, m_header->lumps[bsp::LUMP_LEAVES]);
@@ -300,7 +300,7 @@ void Map::TriangulateFaces() {
     std::cout << "Triangulated map into " << (m_masterIndices.size() / 3) << " unique Vulkan triangles.\n";
 
     // ------------------------------------------------------------------------
-    // ---> NEW: Separate World Geometry from Brush Entities
+    // Separate World Geometry from Brush Entities
     // ------------------------------------------------------------------------
     m_subModels.resize(m_bspModels.size());
 

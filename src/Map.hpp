@@ -58,10 +58,10 @@ public:
     uint32_t GetMaxIndexCount() const { return static_cast<uint32_t>(m_masterIndices.size()); }
     const std::vector<uint32_t>& GetMasterIndices() const { return m_masterIndices; }
 
-    // ---> NEW: Get a specific Sub-Model to draw it
+    // Get a specific Sub-Model to draw it
     const SubModel& GetSubModel(uint32_t modelId) const;
 
-    // ---> NEW: Dynamic PVS querying
+    // Dynamic PVS querying
     // Takes the camera position and populates the output arrays with only visible geometry
     void BuildVisibleBatches(const glm::vec3& cameraPos, 
                              std::vector<uint32_t>& outIndices, 
@@ -73,7 +73,7 @@ private:
     void ParseEntities(std::span<const std::byte> data);
     void TriangulateFaces();
 
-    // ---> NEW: PVS Math Helpers
+    // PVS Math Helpers
     int FindCameraLeaf(const glm::vec3& cameraPos) const;
     std::vector<uint8_t> DecompressPVS(int leafIndex) const;
     bool CheckBit(const std::vector<uint8_t>& pvs, int leafIndex) const;
@@ -94,8 +94,8 @@ private:
     std::span<const bsp::BspClipNode> m_bspClipNodes;
     std::span<const uint8_t>         m_bspVisibility;
     std::span<const uint16_t>        m_bspMarkSurfaces;
-    std::span<const bsp::BspModel>   m_bspModels; // <--- NEW LUMP
-    std::vector<SubModel>            m_subModels;   // <--- NEW STORAGE
+    std::span<const bsp::BspModel>   m_bspModels; // LUMP
+    std::vector<SubModel>            m_subModels;   // STORAGE
 
     std::vector<RenderVertex> m_renderVertices;
     std::vector<TextureData>  m_textures;

@@ -107,8 +107,8 @@ private:
         engine::GpuImage texture;
         VkDescriptorSet descriptorSet;
         uint32_t indexCount;
-        uint32_t verticesPerFrame; // <--- NEW
-        uint32_t numFrames;        // <--- NEW
+        uint32_t verticesPerFrame;
+        uint32_t numFrames;
     };
 
     VkDescriptorSetLayout m_modelDescriptorLayout = VK_NULL_HANDLE;

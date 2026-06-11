@@ -351,7 +351,7 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
-    // ---> NEW: PVS CULLING HAPPENS HERE!
+    // PVS CULLING HAPPENS HERE!
     std::vector<uint32_t> visibleIndices;
     std::vector<RenderBatch> visibleBatches;
     map.BuildVisibleBatches(camera.GetPosition(), visibleIndices, visibleBatches);
@@ -362,7 +362,6 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
                visibleIndices.data(), 
                visibleIndices.size() * sizeof(uint32_t));
     }
-    // <--- END NEW
 
     uint32_t imageIndex;
     vkAcquireNextImageKHR(m_vkbDevice.device, m_vkbSwapchain.swapchain, UINT64_MAX, 
@@ -395,7 +394,7 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
     
-    // ---> NEW: Bind the dynamic index buffer for THIS frame
+    // Bind the dynamic index buffer for THIS frame
     vkCmdBindIndexBuffer(cmd, m_dynamicIndexBuffers[m_currentFrame].buffer, 0, VK_INDEX_TYPE_UINT32);
 
     glm::mat4 view = camera.GetViewMatrix();
@@ -404,13 +403,13 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     glm::mat4 mvp = proj * view;
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
 
-    // ---> NEW: Use the dynamically built batches
+    // Use the dynamically built batches
     for (const auto& batch : visibleBatches) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
         vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
 
-    // ---> NEW: Draw Dynamic Brush Entities (Doors, platforms)
+    // Draw Dynamic Brush Entities (Doors, platforms)
     for (const auto& rent : renderEntities) {
         if (rent.type != EntityModelType::BspBrush) continue;
         if (rent.modelId == 0) continue; // Model 0 was already drawn by the PVS pass!
@@ -431,7 +430,7 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         }
     }
 
-    // ---> NEW: Draw Alias Models
+    // Draw Alias Models
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipeline);
 
     for (const auto& rent : renderEntities) {

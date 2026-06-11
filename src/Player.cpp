@@ -205,7 +205,7 @@ void Player::StepSlideMove(float deltaTime) {
 }
 
 void Player::TickPhysics(const UserCmd& cmd) {
-    // ---> NEW: Unstick from BSP floating point errors!
+    // Unstick from BSP floating point errors!
     CheckStuck();
     
     // 1. Full Gravity Application (Standard Euler)

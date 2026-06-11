@@ -23,11 +23,11 @@ public:
             allocation = other.allocation;
             allocator = other.allocator;
             size = other.size;
-            mappedData = other.mappedData; // <--- NEW
+            mappedData = other.mappedData;
 
             other.buffer = VK_NULL_HANDLE;
             other.allocation = VK_NULL_HANDLE;
-            other.mappedData = nullptr;      // <--- NEW
+            other.mappedData = nullptr;
         }
         return *this;
     }
@@ -45,7 +45,7 @@ public:
     VmaAllocation allocation = VK_NULL_HANDLE;
     VmaAllocator allocator = VK_NULL_HANDLE;
     size_t size = 0;
-    void* mappedData = nullptr; // <--- NEW: Pointer to mapped CPU memory
+    void* mappedData = nullptr; // Pointer to mapped CPU memory
 };
 
 // A helper structure to hold the Vulkan context needed for uploads
@@ -63,7 +63,7 @@ GpuBuffer CreateAndUploadBuffer(
     VkBufferUsageFlags usage
 );
 
-// ---> NEW: Creates a buffer that is permanently mapped to the CPU for per-frame updates
+// Creates a buffer that is permanently mapped to the CPU for per-frame updates
 GpuBuffer CreateDynamicBuffer(const VulkanContext& ctx, size_t size, VkBufferUsageFlags usage);
 
 } // namespace engine

@@ -41,7 +41,7 @@ private:
     const float sv_accelerate = 10.0f;
     const float sv_airaccelerate = 10.0f; 
     const float sv_friction = 4.0f;
-    const float sv_edgefriction = 2.0f; // NEW
+    const float sv_edgefriction = 2.0f;
     const float sv_stopspeed = 100.0f;
     const float sv_stepsize = 18.0f;
 

@@ -86,7 +86,7 @@ void Engine::Init() {
         // Hand the map over to the Renderer so it can upload everything to VRAM
         m_renderer->UploadMap(*m_map);
 
-        // ---> NEW: Initialize Physics and Player
+        // Initialize Physics and Player
         m_physics = std::make_unique<Physics>(m_map.get());
         m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
     } else {
@@ -126,7 +126,6 @@ void Engine::Init() {
         }
 
         if (foundSpawn) {
-            // ---> NEW: Use Player::Spawn!
             m_player->Spawn(spawnOrigin, spawnAngle);
             std::cout << "Player spawned at: " << spawnOrigin.x << ", " 
                       << spawnOrigin.y << ", " << spawnOrigin.z << "\n";
@@ -197,18 +196,18 @@ void Engine::MainLoop() {
         if (keys[SDL_SCANCODE_W]) cmd.forwardmove += 400.0f;
         if (keys[SDL_SCANCODE_S]) cmd.forwardmove -= 400.0f;
         
-        // ---> FIX: Asymmetric sidemove!
+        // ---> FIX: Asymmetric sidemove
         if (keys[SDL_SCANCODE_D]) cmd.sidemove += 350.0f;
         if (keys[SDL_SCANCODE_A]) cmd.sidemove -= 350.0f;
         
         // Handle jump using Spacebar
         if (keys[SDL_SCANCODE_SPACE]) cmd.upmove = 400.0f;
 
-        // ---> NEW: Player Physics Tick using UserCmd
+        // Player Physics Tick using UserCmd
         m_player->TickPhysics(cmd);
 
         // ========================================================================
-        // ---> NEW: Entity Simulation (The Game Tick)
+        // Entity Simulation (The Game Tick)
         // ========================================================================
         float animationSpeed = 10.0f; // 10 FPS
         for (auto& rent : m_renderEntities) {
@@ -223,7 +222,6 @@ void Engine::MainLoop() {
                 }
             }
         }
-        // <--- END NEW
 
         // 4. Render
         m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities);
