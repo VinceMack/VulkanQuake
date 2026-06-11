@@ -43,6 +43,8 @@ public:
     const std::vector<Entity>& GetEntities() const { return m_entities; }
     const TextureData& GetLightmapAtlas() const { return m_lightmapAtlas; }
 
+    const std::vector<Entity>& GetEntities() const { return m_entities; }
+
 private:
     void ParseLumps(std::span<const std::byte> data);
     void ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette);
@@ -51,6 +53,10 @@ private:
 
     std::span<const uint8_t> m_bspLighting;
     TextureData m_lightmapAtlas;
+    std::vector<Entity> m_entities;
+
+    void ParseEntities(std::span<const std::byte> data);
+    
     std::vector<Entity> m_entities;
 
     // Raw pointers mapped directly over the binary data (Zero-copy parsing!)
