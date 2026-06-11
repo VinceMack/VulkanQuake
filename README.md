@@ -7,6 +7,6 @@ This project was built and tested with the following dependencies:
 * **[CMake 4.3](https://cmake.org/download/)**
 
 * **[Visual Studio Build Tools 2026](https://visualstudio.microsoft.com/downloads/)** (with the following individual components selected):
-  1. **Windows 11 SDK** (`10.0.28000.1839`)
-  2. **MSVC Build Tools for x64/x86** (Latest)
-  3. **C++ CMake tools for Windows**
+    1. **Windows 11 SDK** (`10.0.28000.1839`)
+    2. **MSVC Build Tools for x64/x86** (Latest)
+    3. **C++ CMake tools for Windows**
