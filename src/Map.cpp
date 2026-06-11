@@ -50,6 +50,7 @@ void Map::ParseLumps(std::span<const std::byte> data) {
     m_bspPlanes       = GetLump<bsp::BspPlane>(data, m_header->lumps[bsp::LUMP_PLANES]);
     m_bspNodes        = GetLump<bsp::BspNode>(data, m_header->lumps[bsp::LUMP_NODES]);
     m_bspLeaves       = GetLump<bsp::BspLeaf>(data, m_header->lumps[bsp::LUMP_LEAVES]);
+    m_bspClipNodes    = GetLump<bsp::BspClipNode>(data, m_header->lumps[bsp::LUMP_CLIPNODES]);
     m_bspVisibility   = GetLump<uint8_t>(data, m_header->lumps[bsp::LUMP_VISIBILITY]);
     m_bspMarkSurfaces = GetLump<uint16_t>(data, m_header->lumps[bsp::LUMP_MARKSURFACES]);
     m_bspModels       = GetLump<bsp::BspModel>(data, m_header->lumps[bsp::LUMP_MODELS]);

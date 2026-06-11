@@ -6,6 +6,13 @@ namespace engine::bsp {
 // Standard Quake 1 BSP Version
 constexpr int32_t BSP_VERSION = 29;
 
+constexpr int CONTENTS_EMPTY  = -1;
+constexpr int CONTENTS_SOLID  = -2;
+constexpr int CONTENTS_WATER  = -3;
+constexpr int CONTENTS_SLIME  = -4;
+constexpr int CONTENTS_LAVA   = -5;
+constexpr int CONTENTS_SKY    = -6;
+
 #pragma pack(push, 1)
 
 struct BspEntry {
@@ -68,6 +75,11 @@ struct BspModel {
     int32_t visleafs;
     int32_t first_face;     // Index into the face lump
     int32_t num_faces;      // How many faces make up this model
+};
+
+struct BspClipNode {
+    uint32_t plane_id;
+    int16_t children[2]; // If negative, it is a CONTENTS_ type
 };
 
 #pragma pack(pop)

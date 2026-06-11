@@ -14,12 +14,17 @@ public:
     void ProcessMouse(float xoffset, float yoffset);
     void ProcessKeyboard(float forward, float right, float deltaTime);
     void SetPositionAndYaw(glm::vec3 pos, float startYaw);
+    void SetPosition(glm::vec3 pos) {
+        position = pos;
+        UpdateVectors();
+    }
 
     glm::mat4 GetViewMatrix() const {
         return glm::lookAt(position, position + front, up);
     }
 
     glm::vec3 GetPosition() const { return position; }
+    float GetYaw() const { return yaw; }
 
 private:
     void UpdateVectors();

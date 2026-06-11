@@ -51,6 +51,10 @@ public:
     const TextureData& GetLightmapAtlas() const { return m_lightmapAtlas; }
     const std::vector<Entity>& GetEntities() const { return m_entities; }
 
+    std::span<const bsp::BspPlane> GetPlanes() const { return m_bspPlanes; }
+    std::span<const bsp::BspClipNode> GetClipNodes() const { return m_bspClipNodes; }
+    const bsp::BspModel& GetBspModel(uint32_t index) const { return m_bspModels[index]; }
+
     uint32_t GetMaxIndexCount() const { return static_cast<uint32_t>(m_masterIndices.size()); }
     const std::vector<uint32_t>& GetMasterIndices() const { return m_masterIndices; }
 
@@ -87,6 +91,7 @@ private:
     std::span<const bsp::BspPlane>   m_bspPlanes;
     std::span<const bsp::BspNode>    m_bspNodes;
     std::span<const bsp::BspLeaf>    m_bspLeaves;
+    std::span<const bsp::BspClipNode> m_bspClipNodes;
     std::span<const uint8_t>         m_bspVisibility;
     std::span<const uint16_t>        m_bspMarkSurfaces;
     std::span<const bsp::BspModel>   m_bspModels; // <--- NEW LUMP

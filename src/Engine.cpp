@@ -85,6 +85,10 @@ void Engine::Init() {
         m_map = std::make_unique<Map>(std::move(*mapData), *paletteData);
         // Hand the map over to the Renderer so it can upload everything to VRAM
         m_renderer->UploadMap(*m_map);
+
+        // ---> NEW: Initialize Physics and Player
+        m_physics = std::make_unique<Physics>(m_map.get());
+        m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
     } else {
         throw std::runtime_error("Failed to load map or palette data.");
     }
@@ -122,10 +126,8 @@ void Engine::Init() {
         }
 
         if (foundSpawn) {
-            // Quake maps origins to the floor where the player stands.
-            // We need to raise the camera to "eye level" (roughly 22 units up in Quake).
-            spawnOrigin.z += 22.0f; 
-            m_camera->SetPositionAndYaw(spawnOrigin, spawnAngle);
+            // ---> NEW: Use Player::Spawn!
+            m_player->Spawn(spawnOrigin, spawnAngle);
             std::cout << "Player spawned at: " << spawnOrigin.x << ", " 
                       << spawnOrigin.y << ", " << spawnOrigin.z << "\n";
         } else {
@@ -144,8 +146,7 @@ void Engine::Init() {
         RenderEntity monsterEnt;
         monsterEnt.type = EntityModelType::Alias;
         monsterEnt.modelId = monsterId;
-        // Spawn him further away, he's huge!
-        monsterEnt.origin = spawnOrigin + (forwardDir * 200.0f) + glm::vec3(0.0f, 0.0f, -22.0f); 
+        monsterEnt.origin = spawnOrigin + (forwardDir * 200.0f); 
         
         // Face him towards the player
         monsterEnt.angles = glm::vec3(0.0f, spawnAngle + 180.0f, 0.0f); 
@@ -181,16 +182,30 @@ void Engine::MainLoop() {
         // 3. Process Input
         float mouseX = 0.0f, mouseY = 0.0f;
         SDL_GetRelativeMouseState(&mouseX, &mouseY);
-        m_camera->ProcessMouse(mouseX, mouseY);
+        m_player->ProcessMouse(mouseX, mouseY); // <--- Goes to player now
 
         const bool* keys = SDL_GetKeyboardState(NULL);
-        float moveForward = 0.0f, moveRight = 0.0f;
-        if (keys[SDL_SCANCODE_W]) moveForward += 1.0f;
-        if (keys[SDL_SCANCODE_S]) moveForward -= 1.0f;
-        if (keys[SDL_SCANCODE_D]) moveRight += 1.0f;
-        if (keys[SDL_SCANCODE_A]) moveRight -= 1.0f;
         
-        m_camera->ProcessKeyboard(moveForward, moveRight, deltaTime);
+        // Populate UserCmd (Quake's player movement command)
+        UserCmd cmd{};
+        cmd.msec = deltaTime;
+        cmd.yaw = m_camera->GetYaw();
+
+        // Standard movement scales
+        // cl_forwardspeed = 200 * cl_movespeedkey(2.0) = 400
+        // cl_sidespeed = 350
+        if (keys[SDL_SCANCODE_W]) cmd.forwardmove += 400.0f;
+        if (keys[SDL_SCANCODE_S]) cmd.forwardmove -= 400.0f;
+        
+        // ---> FIX: Asymmetric sidemove!
+        if (keys[SDL_SCANCODE_D]) cmd.sidemove += 350.0f;
+        if (keys[SDL_SCANCODE_A]) cmd.sidemove -= 350.0f;
+        
+        // Handle jump using Spacebar
+        if (keys[SDL_SCANCODE_SPACE]) cmd.upmove = 400.0f;
+
+        // ---> NEW: Player Physics Tick using UserCmd
+        m_player->TickPhysics(cmd);
 
         // ========================================================================
         // ---> NEW: Entity Simulation (The Game Tick)
