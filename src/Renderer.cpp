@@ -78,12 +78,19 @@ void Renderer::InitVulkan() {
     if (!inst_ret) throw std::runtime_error("Failed to create Vulkan Instance");
     m_vkbInst = inst_ret.value();
 
-    SDL_Vulkan_CreateSurface(m_window->GetHandle(), m_vkbInst.instance, nullptr, &m_surface);
+    if (!SDL_Vulkan_CreateSurface(m_window->GetHandle(), m_vkbInst.instance, nullptr, &m_surface)) {
+        throw std::runtime_error("Failed to create Vulkan Surface");
+    }
 
+    // Downgrade to 1.1 to maximize compatibility across different PCs
     vkb::PhysicalDeviceSelector selector{ m_vkbInst };
-    auto phys_ret = selector.set_surface(m_surface).set_minimum_version(1, 2).select();
+    auto phys_ret = selector.set_surface(m_surface).set_minimum_version(1, 1).select();
+    if (!phys_ret) throw std::runtime_error("Failed to find suitable GPU: " + phys_ret.error().message());
+
     vkb::DeviceBuilder device_builder{ phys_ret.value() };
-    m_vkbDevice = device_builder.build().value();
+    auto dev_ret = device_builder.build();
+    if (!dev_ret) throw std::runtime_error("Failed to build Logical Device");
+    m_vkbDevice = dev_ret.value();
 
     m_graphicsQueue = m_vkbDevice.get_queue(vkb::QueueType::graphics).value();
     m_graphicsQueueFamily = m_vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
@@ -92,14 +99,27 @@ void Renderer::InitVulkan() {
     poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = m_graphicsQueueFamily;
-    vkCreateCommandPool(m_vkbDevice.device, &poolInfo, nullptr, &m_commandPool);
+    if (vkCreateCommandPool(m_vkbDevice.device, &poolInfo, nullptr, &m_commandPool) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create command pool");
+    }
+
+    // Safe VMA Initialization
+    // Explicitly hand VMA the Vulkan loader functions so it doesn't execute null pointers
+    VmaVulkanFunctions vulkanFunctions = {};
+    vulkanFunctions.vkGetInstanceProcAddr = &vkGetInstanceProcAddr;
+    vulkanFunctions.vkGetDeviceProcAddr = &vkGetDeviceProcAddr;
 
     VmaAllocatorCreateInfo allocatorInfo = {};
     allocatorInfo.physicalDevice = phys_ret.value().physical_device;
     allocatorInfo.device = m_vkbDevice.device;
     allocatorInfo.instance = m_vkbInst.instance;
-    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_2; 
-    vmaCreateAllocator(&allocatorInfo, &m_allocator);
+    // Set to 1.0 to guarantee standard Vulkan pointers are used safely
+    allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0; 
+    allocatorInfo.pVulkanFunctions = &vulkanFunctions; // Pass the safe pointers
+
+    if (vmaCreateAllocator(&allocatorInfo, &m_allocator) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create VMA allocator");
+    }
 }
 
 void Renderer::InitSwapchain() {
