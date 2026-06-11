@@ -72,6 +72,8 @@ add_executable(VulkanQuake
     src/Camera.hpp
     src/Engine.cpp
     src/Engine.hpp
+    src/Entity.cpp
+    src/Entity.hpp
     src/GpuBuffer.hpp
     src/GpuBuffer.cpp
     src/GpuImage.cpp
