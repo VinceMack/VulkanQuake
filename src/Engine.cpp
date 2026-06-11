@@ -85,6 +85,30 @@ void Engine::Init() {
     } else {
         throw std::runtime_error("Failed to load map or palette data.");
     }
+        // Spawn the Camera using Entity data
+        glm::vec3 spawnOrigin(0.0f, 0.0f, 0.0f);
+        float spawnAngle = 0.0f;
+        bool foundSpawn = false;
+
+        for (const auto& ent : m_map->GetEntities()) {
+            if (ent.GetClassname() == "info_player_start") {
+                spawnOrigin = ent.GetVector("origin");
+                spawnAngle = ent.GetFloat("angle");
+                foundSpawn = true;
+                break;
+            }
+        }
+
+        if (foundSpawn) {
+            // Quake maps origins to the floor where the player stands.
+            // We need to raise the camera to "eye level" (roughly 22 units up in Quake).
+            spawnOrigin.z += 22.0f; 
+            m_camera->SetPositionAndYaw(spawnOrigin, spawnAngle);
+            std::cout << "Player spawned at: " << spawnOrigin.x << ", " 
+                      << spawnOrigin.y << ", " << spawnOrigin.z << "\n";
+        } else {
+            std::cerr << "WARNING: No info_player_start found. Spawning at 0,0,0.\n";
+        }
 
     m_isRunning = true;
 }
