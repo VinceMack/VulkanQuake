@@ -1,6 +1,7 @@
 #pragma once
 #include "BspFormat.hpp"
 #include "Entity.hpp"
+#include "RenderEntity.hpp"
 #include <vector>
 #include <cstddef>
 #include <span>
@@ -37,6 +38,10 @@ struct FaceData {
     uint32_t indexCount;
 };
 
+struct SubModel {
+    std::vector<RenderBatch> batches;
+};
+
 class Map {
 public:
     Map(std::vector<std::byte> bspData, std::span<const std::byte> paletteData);
@@ -47,6 +52,10 @@ public:
     const std::vector<Entity>& GetEntities() const { return m_entities; }
 
     uint32_t GetMaxIndexCount() const { return static_cast<uint32_t>(m_masterIndices.size()); }
+    const std::vector<uint32_t>& GetMasterIndices() const { return m_masterIndices; }
+
+    // ---> NEW: Get a specific Sub-Model to draw it
+    const SubModel& GetSubModel(uint32_t modelId) const;
 
     // ---> NEW: Dynamic PVS querying
     // Takes the camera position and populates the output arrays with only visible geometry
@@ -80,6 +89,8 @@ private:
     std::span<const bsp::BspLeaf>    m_bspLeaves;
     std::span<const uint8_t>         m_bspVisibility;
     std::span<const uint16_t>        m_bspMarkSurfaces;
+    std::span<const bsp::BspModel>   m_bspModels; // <--- NEW LUMP
+    std::vector<SubModel>            m_subModels;   // <--- NEW STORAGE
 
     std::vector<RenderVertex> m_renderVertices;
     std::vector<TextureData>  m_textures;

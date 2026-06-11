@@ -201,6 +201,10 @@ void Renderer::UploadMap(const Map& map) {
         m_dynamicIndexBuffers.push_back(
             engine::CreateDynamicBuffer(vkCtx, indexBufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
         );
+        // Copy the master indices once at startup so sub-models are populated
+        memcpy(m_dynamicIndexBuffers.back().mappedData, 
+               map.GetMasterIndices().data(), 
+               indexBufferSize);
     }
     m_lightmapAtlasTexture = engine::CreateAndUploadImage(vkCtx, map.GetLightmapAtlas());
 
@@ -265,7 +269,7 @@ for (size_t i = 0; i < m_gpuTextures.size(); i++) {
     }
 }
 
-void Renderer::DrawFrame(const Camera& camera, const Map& map) {
+void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
@@ -326,6 +330,26 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map) {
     for (const auto& batch : visibleBatches) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
         vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
+    }
+
+    // ---> NEW: Draw Dynamic Brush Entities (Doors, platforms)
+    for (const auto& rent : renderEntities) {
+        if (rent.modelId == 0) continue; // Model 0 was already drawn by the PVS pass!
+
+        const SubModel& subModel = map.GetSubModel(rent.modelId);
+        
+        // Calculate the specific matrix for THIS door
+        glm::mat4 modelMatrix = rent.GetTransformMatrix();
+        glm::mat4 entMvp = proj * view * modelMatrix;
+        
+        // Push the new matrix to the GPU
+        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &entMvp);
+
+        // Draw the door's batches
+        for (const auto& batch : subModel.batches) {
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
+            vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
+        }
     }
 
     vkCmdEndRenderPass(cmd);

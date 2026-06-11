@@ -52,6 +52,7 @@ void Map::ParseLumps(std::span<const std::byte> data) {
     m_bspLeaves       = GetLump<bsp::BspLeaf>(data, m_header->lumps[bsp::LUMP_LEAVES]);
     m_bspVisibility   = GetLump<uint8_t>(data, m_header->lumps[bsp::LUMP_VISIBILITY]);
     m_bspMarkSurfaces = GetLump<uint16_t>(data, m_header->lumps[bsp::LUMP_MARKSURFACES]);
+    m_bspModels       = GetLump<bsp::BspModel>(data, m_header->lumps[bsp::LUMP_MODELS]);
 }
 
 void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::byte> palette) {
@@ -296,6 +297,43 @@ void Map::TriangulateFaces() {
     }
     std::cout << "Packed Lightmaps into Atlas. Max Y used: " << (atlasY + atlasRowHeight) << " / 1024\n";
     std::cout << "Triangulated map into " << (m_masterIndices.size() / 3) << " unique Vulkan triangles.\n";
+
+    // ------------------------------------------------------------------------
+    // ---> NEW: Separate World Geometry from Brush Entities
+    // ------------------------------------------------------------------------
+    m_subModels.resize(m_bspModels.size());
+
+    for (size_t m = 0; m < m_bspModels.size(); ++m) {
+        const auto& bspModel = m_bspModels[m];
+        
+        std::vector<std::vector<uint32_t>> modelIndicesByTex(m_textures.size());
+
+        // Gather all faces for THIS specific model
+        for (int i = 0; i < bspModel.num_faces; ++i) {
+            uint32_t faceIndex = bspModel.first_face + i;
+            const FaceData& fd = m_faceData[faceIndex];
+            
+            const uint32_t* src = m_masterIndices.data() + fd.firstIndex;
+            modelIndicesByTex[fd.textureId].insert(modelIndicesByTex[fd.textureId].end(), src, src + fd.indexCount);
+        }
+
+        // Generate the Vulkan RenderBatches for this specific model
+        for (uint32_t t = 0; t < modelIndicesByTex.size(); ++t) {
+            if (modelIndicesByTex[t].empty()) continue;
+
+            RenderBatch batch;
+            batch.textureId = t;
+            batch.firstIndex = static_cast<uint32_t>(m_masterIndices.size());
+            batch.indexCount = static_cast<uint32_t>(modelIndicesByTex[t].size());
+            
+            m_subModels[m].batches.push_back(batch);
+            
+            // Append to the master array
+            m_masterIndices.insert(m_masterIndices.end(), modelIndicesByTex[t].begin(), modelIndicesByTex[t].end());
+        }
+    }
+    
+    std::cout << "Extracted " << m_bspModels.size() << " Sub-Models (Model 0 is World).\n";
 } // End of TriangulateFaces
 
 int Map::FindCameraLeaf(const glm::vec3& cameraPos) const {
@@ -363,14 +401,19 @@ void Map::BuildVisibleBatches(const glm::vec3& cameraPos, std::vector<uint32_t>&
 
     std::vector<bool> faceVisible(m_bspFaces.size(), false);
 
-    // Find all visible faces
+    // Find all visible faces (only for Model 0 / World)
+    uint32_t worldFirstFace = m_bspModels[0].first_face;
+    uint32_t worldNumFaces = m_bspModels[0].num_faces;
+
     for (size_t leafIdx = 1; leafIdx < m_bspLeaves.size(); ++leafIdx) {
         if (!CheckBit(pvs, leafIdx)) continue; // Culled!
 
         const auto& leaf = m_bspLeaves[leafIdx];
         for (int i = 0; i < leaf.num_marksurfaces; ++i) {
             uint16_t faceIndex = m_bspMarkSurfaces[leaf.first_marksurface + i];
-            faceVisible[faceIndex] = true;
+            if (faceIndex >= worldFirstFace && faceIndex < worldFirstFace + worldNumFaces) {
+                faceVisible[faceIndex] = true;
+            }
         }
     }
 
@@ -399,6 +442,11 @@ void Map::BuildVisibleBatches(const glm::vec3& cameraPos, std::vector<uint32_t>&
         outBatches.push_back(batch);
         outIndices.insert(outIndices.end(), indicesByTexture[t].begin(), indicesByTexture[t].end());
     }
+}
+
+const SubModel& Map::GetSubModel(uint32_t modelId) const {
+    if (modelId >= m_subModels.size()) return m_subModels[0]; // Fallback to safe data
+    return m_subModels[modelId];
 }
 
 } // namespace engine

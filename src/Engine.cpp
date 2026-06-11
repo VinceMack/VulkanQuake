@@ -91,11 +91,29 @@ void Engine::Init() {
         bool foundSpawn = false;
 
         for (const auto& ent : m_map->GetEntities()) {
-            if (ent.GetClassname() == "info_player_start") {
+            std::string cls = ent.GetClassname();
+
+            // 1. Spawn Player
+            if (cls == "info_player_start") {
                 spawnOrigin = ent.GetVector("origin");
                 spawnAngle = ent.GetFloat("angle");
                 foundSpawn = true;
-                break;
+            }
+            
+            // 2. Simulate Server sending Brush Entities to the Client.
+            // Any entity with a "model" key starting with "*" is a BSP Sub-Model.
+            std::string modelStr = ent.GetString("model");
+            if (!modelStr.empty() && modelStr[0] == '*') {
+                RenderEntity rent;
+                rent.modelId = std::stoi(modelStr.substr(1));
+                rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
+                
+                // rush entities are already rotated correctly in the BSP vertex data.
+                // The "angle" key dictates the logic of which way it slides when opened, NOT its visual rotation
+                rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
+                
+                rent.frame = 0;
+                m_renderEntities.push_back(rent);
             }
         }
 
@@ -145,7 +163,7 @@ void Engine::MainLoop() {
         m_camera->ProcessKeyboard(moveForward, moveRight, deltaTime);
 
         // 4. Render
-        m_renderer->DrawFrame(*m_camera, *m_map);
+        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities);
     }
 }
 

@@ -61,6 +61,15 @@ struct BspLeaf {
     uint8_t ambient_level[4];
 };
 
+struct BspModel {
+    float mins[3], maxs[3]; // Bounding box
+    float origin[3];        // Center of the model
+    int32_t headnode[4];    // BSP tree nodes
+    int32_t visleafs;
+    int32_t first_face;     // Index into the face lump
+    int32_t num_faces;      // How many faces make up this model
+};
+
 #pragma pack(pop)
 
 struct BspTexInfo {

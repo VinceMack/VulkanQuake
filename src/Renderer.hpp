@@ -5,6 +5,7 @@
 #include "GpuBuffer.hpp"
 #include "GpuImage.hpp"
 #include "PipelineSetup.hpp"
+#include "RenderEntity.hpp"
 
 #include <vulkan/vulkan.h>
 #include <VkBootstrap.h>
@@ -27,7 +28,7 @@ public:
     void UploadMap(const Map& map);
     
     // The main Render Loop execution
-    void DrawFrame(const Camera& camera, const Map& map);
+    void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities);
 
 private:
     void InitVulkan();
