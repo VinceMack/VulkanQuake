@@ -7,16 +7,26 @@
 namespace engine {
 
 VkDescriptorSetLayout PipelineSetup::CreateDescriptorSetLayout(VkDevice device) {
-    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 0;
-    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerLayoutBinding.descriptorCount = 1;
-    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Binding 0: Diffuse Texture
+    VkDescriptorSetLayoutBinding diffuseBinding{};
+    diffuseBinding.binding = 0;
+    diffuseBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    diffuseBinding.descriptorCount = 1;
+    diffuseBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    // Binding 1: Lightmap Atlas Texture
+    VkDescriptorSetLayoutBinding lightmapBinding{};
+    lightmapBinding.binding = 1;
+    lightmapBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    lightmapBinding.descriptorCount = 1;
+    lightmapBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    std::array<VkDescriptorSetLayoutBinding, 2> bindings = { diffuseBinding, lightmapBinding };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &samplerLayoutBinding;
+    layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    layoutInfo.pBindings = bindings.data();
 
     VkDescriptorSetLayout descriptorSetLayout;
     if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
@@ -176,7 +186,7 @@ VkPipeline PipelineSetup::CreateGraphicsPipeline(VkDevice device, VkRenderPass r
     bindingDescription.stride = sizeof(engine::RenderVertex);
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
     // Position
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
@@ -187,6 +197,11 @@ VkPipeline PipelineSetup::CreateGraphicsPipeline(VkDevice device, VkRenderPass r
     attributeDescriptions[1].location = 1;
     attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[1].offset = offsetof(engine::RenderVertex, uv);
+    // Lightmap UVs
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[2].offset = offsetof(engine::RenderVertex, lightmapUV);
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;

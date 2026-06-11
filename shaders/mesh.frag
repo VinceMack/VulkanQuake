@@ -1,14 +1,17 @@
 #version 450
 
-// Fragment Shader
-
 layout(location = 0) in vec2 fragUV;
+layout(location = 1) in vec2 fragLightmapUV;
+
 layout(location = 0) out vec4 outColor;
 
-// Descriptor Set binding
-layout(binding = 0) uniform sampler2D texSampler;
+layout(binding = 0) uniform sampler2D diffuseSampler;
+layout(binding = 1) uniform sampler2D lightmapSampler;
 
 void main() {
-    // Sample the color from the texture at the given UV coordinate
-    outColor = texture(texSampler, fragUV);
+    vec4 diffuseColor = texture(diffuseSampler, fragUV);
+    vec4 lightmapColor = texture(lightmapSampler, fragLightmapUV);
+    
+    // Multiply the textures (increase hardcoded '1' value to increase brightness)
+    outColor = diffuseColor * lightmapColor * 1;
 }
