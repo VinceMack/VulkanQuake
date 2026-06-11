@@ -42,4 +42,11 @@ void Camera::UpdateVectors() {
     up    = glm::normalize(glm::cross(right, front));
 }
 
+void Camera::SetPositionAndYaw(glm::vec3 pos, float startYaw) {
+        position = pos;
+        yaw = startYaw;
+        pitch = 0.0f; // Look straight ahead
+        UpdateVectors();
+    }
+
 } // namespace engine
