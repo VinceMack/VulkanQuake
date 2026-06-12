@@ -1,2 +1,5 @@
 # Ignore CMake Build Files
 /build/
+
+# Ignore log files
+*.log
