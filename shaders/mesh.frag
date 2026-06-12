@@ -13,8 +13,13 @@ layout(set = 0, binding = 1) uniform sampler2D lightmapSampler;
 
 // ---> NEW: The 64 animated lightstyle floats are in Set 1
 layout(set = 1, binding = 0) uniform Lightstyles {
-    float values[64];
+    vec4 values[16]; // 16 vec4s = exactly 64 floats (256 bytes, tightly packed!)
 } ubo;
+
+// Helper function to extract the correct float
+float GetLightstyle(uint index) {
+    return ubo.values[index / 4][index % 4];
+}
 
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
@@ -52,10 +57,10 @@ void main() {
     
     // Composite the 4 shadow layers using the UBO array
     float brightness = 0.0;
-    if (fragStyles.x != 255) brightness += lm.r * ubo.values[fragStyles.x];
-    if (fragStyles.y != 255) brightness += lm.g * ubo.values[fragStyles.y];
-    if (fragStyles.z != 255) brightness += lm.b * ubo.values[fragStyles.z];
-    if (fragStyles.w != 255) brightness += lm.a * ubo.values[fragStyles.w];
+    if (fragStyles.x != 255) brightness += lm.r * GetLightstyle(fragStyles.x);
+    if (fragStyles.y != 255) brightness += lm.g * GetLightstyle(fragStyles.y);
+    if (fragStyles.z != 255) brightness += lm.b * GetLightstyle(fragStyles.z);
+    if (fragStyles.w != 255) brightness += lm.a * GetLightstyle(fragStyles.w);
 
     // If no lightstyles are active (water, slime, lava, or fallback geometry) or if it's a liquid, use the fallback lightmap value (lm.r)
     if (pcs.surfaceType == 1 || (fragStyles.x == 255 && fragStyles.y == 255 && fragStyles.z == 255 && fragStyles.w == 255)) {
