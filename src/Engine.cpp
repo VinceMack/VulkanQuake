@@ -325,7 +325,14 @@ bool Engine::LoadMap(const std::string& mapName) {
             rent.isSolid = true;
             rent.isVisible = true;
             rent.isTrigger = false;
-            rent.brushState = BrushState::Static; // Default to static
+            rent.brushState = BrushState::Static; 
+
+            // ---> NEW: Extract Targeting Strings
+            rent.targetname = ent.GetString("targetname");
+            rent.target = ent.GetString("target");
+            
+            // In Quake, if an entity has a targetname, it ignores player touch!
+            rent.requireTrigger = !rent.targetname.empty(); 
 
             if (cls.find("trigger_") != std::string::npos) {
                 rent.isSolid = false;
@@ -337,19 +344,21 @@ bool Engine::LoadMap(const std::string& mapName) {
             } else if (cls == "func_illusionary") {
                 rent.isSolid = false;
             } 
-            // ==============================================================
-            // ---> NEW: func_door Kinematics Math
-            // ==============================================================
-            else if (cls == "func_door" || cls == "func_water" || cls == "func_door_secret") {
+            // ---> UPDATED: Added func_button and dynamic defaults
+            else if (cls == "func_door" || cls == "func_water" || cls == "func_door_secret" || cls == "func_button") {
                 rent.brushState = BrushState::Closed;
-                rent.pos1 = rent.origin; // Starts closed
+                rent.pos1 = rent.origin; 
                 
+                // Buttons have different defaults than doors!
+                float defaultSpeed = (cls == "func_button") ? 40.0f : 100.0f;
+                float defaultWait  = (cls == "func_button") ? 1.0f : 3.0f;
+                float defaultLip   = (cls == "func_button") ? 4.0f : 8.0f;
+
                 float angle = ent.GetFloat("angle", 0.0f);
-                rent.speed = ent.GetFloat("speed", 100.0f);
-                rent.wait = ent.GetFloat("wait", 3.0f);
-                float lip = ent.GetFloat("lip", 8.0f);
+                rent.speed = ent.GetFloat("speed", defaultSpeed);
+                rent.wait = ent.GetFloat("wait", defaultWait);
+                float lip = ent.GetFloat("lip", defaultLip);
                 
-                // Determine direction of movement
                 glm::vec3 dir(0.0f);
                 if (angle == -1.0f) dir = glm::vec3(0.0f, 0.0f, 1.0f);       // UP
                 else if (angle == -2.0f) dir = glm::vec3(0.0f, 0.0f, -1.0f); // DOWN
@@ -363,13 +372,11 @@ bool Engine::LoadMap(const std::string& mapName) {
                                               bspModel.maxs[1] - bspModel.mins[1],
                                               bspModel.maxs[2] - bspModel.mins[2]);
                 
-                // Quake calculates move distance based on the size of the door along the move axis, minus the lip
                 float moveDist = std::abs(glm::dot(extents, dir)) - lip;
-                rent.pos2 = rent.pos1 + (dir * moveDist); // Open position
+                rent.pos2 = rent.pos1 + (dir * moveDist); 
                 rent.stateTimer = 0.0f;
             }
 
-            // Save local bounding box (for moving collisions)
             const auto& bspModel = m_map->GetBspModel(rent.modelId);
             rent.localMins = glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
             rent.localMaxs = glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
@@ -464,13 +471,14 @@ void Engine::MainLoop() {
         // ========================================================================
         float animationSpeed = 10.0f; 
         
-        // 1. Proximity Trigger check for doors
-        // We expand the player's bounding box by 32 units to "reach out" and touch doors
         glm::vec3 pTouchMins = m_player->GetPosition() + glm::vec3(-48.0f, -48.0f, -10.0f);
         glm::vec3 pTouchMaxs = m_player->GetPosition() + glm::vec3(48.0f, 48.0f, 66.0f);
 
+        // We use a list to queue up events so we don't modify the state of other entities 
+        // while we are currently iterating through the array!
+        std::vector<std::string> firedEvents;
+
         for (auto& rent : m_renderEntities) {
-            // Animate Alias Models
             if (rent.type == EntityModelType::Alias) {
                 rent.interp += animationSpeed * deltaTime;
                 if (rent.interp >= 1.0f) {
@@ -479,11 +487,11 @@ void Engine::MainLoop() {
                     rent.nextFrame = rent.frame + 1;
                 }
             } 
-            // ---> NEW: Process Brush Kinematics
             else if (rent.type == EntityModelType::BspBrush) {
                 
-                // If it's closed, see if the player bumped into it
-                if (rent.brushState == BrushState::Closed) {
+                // 1. Proximity Trigger check
+                // ---> NEW: We ONLY allow touch triggers if the entity doesn't have a targetname!
+                if (rent.brushState == BrushState::Closed && !rent.requireTrigger) {
                     glm::vec3 dMins = rent.GetAbsMins();
                     glm::vec3 dMaxs = rent.GetAbsMaxs();
                     
@@ -491,7 +499,12 @@ void Engine::MainLoop() {
                         pTouchMins.y <= dMaxs.y && pTouchMaxs.y >= dMins.y &&
                         pTouchMins.z <= dMaxs.z && pTouchMaxs.z >= dMins.z) {
                         
-                        rent.brushState = BrushState::Opening; // Open sesame!
+                        rent.brushState = BrushState::Opening; 
+                        
+                        // ---> NEW: If this was a button, fire its target!
+                        if (!rent.target.empty()) {
+                            firedEvents.push_back(rent.target);
+                        }
                     }
                 }
                 
@@ -522,6 +535,16 @@ void Engine::MainLoop() {
                         rent.origin = rent.pos1; // Clamp
                         rent.brushState = BrushState::Closed;
                     }
+                }
+            }
+        }
+
+        // ---> NEW: Broadcast Fired Events to all listening entities!
+        for (const std::string& eventName : firedEvents) {
+            for (auto& rent : m_renderEntities) {
+                if (rent.targetname == eventName && rent.brushState == BrushState::Closed) {
+                    rent.brushState = BrushState::Opening;
+                    m_console->Print("Event Triggered: " + eventName);
                 }
             }
         }

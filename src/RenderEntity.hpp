@@ -24,6 +24,11 @@ struct RenderEntity {
     bool isTrigger = false;
     std::string triggerTarget; 
 
+    // ---> NEW: Entity Targeting System
+    std::string targetname; // The name this entity listens for
+    std::string target;     // The event this entity fires when activated
+    bool requireTrigger = false; // True if it has a targetname (cannot be proximity-opened) 
+
     // ---> UPDATED: Local bounds so they can move with the origin
     glm::vec3 localMins; 
     glm::vec3 localMaxs;
