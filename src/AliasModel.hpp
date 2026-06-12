@@ -22,7 +22,7 @@ public:
     const std::vector<uint32_t>& GetIndices() const { return m_indices; }
     const TextureData& GetTexture() const { return m_texture; }
 
-    uint32_t GetNumFrames() const { return m_header ? m_header->num_frames : 0; }
+    uint32_t GetNumFrames() const { return m_totalFrames; } // <--- UPDATED
     uint32_t GetVerticesPerFrame() const { return static_cast<uint32_t>(m_indices.size()); }
 
 private:
@@ -39,6 +39,7 @@ private:
     std::vector<ModelVertex> m_vertices;
     std::vector<uint32_t> m_indices;
     TextureData m_texture;
+    uint32_t m_totalFrames = 0; // <--- NEW: true frame count including group frames
 };
 
 } // namespace engine

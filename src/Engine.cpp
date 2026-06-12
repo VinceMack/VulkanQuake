@@ -295,7 +295,12 @@ bool Engine::LoadMap(const std::string& mapName) {
         {"weapon_grenadelauncher", "progs/g_rock.mdl"}, {"weapon_lightning", "progs/g_light.mdl"},
         {"item_shells", "progs/m_shell.mdl"}, {"item_spikes", "progs/m_nail.mdl"},
         {"item_rockets", "progs/m_rock.mdl"}, {"item_cells", "progs/m_light.mdl"},
-        {"item_health", "progs/m_health.mdl"}
+        {"item_health", "progs/m_health.mdl"},
+        // ---> NEW: Flame Models!
+        {"light_torch_small_walltorch", "progs/flame.mdl"},
+        {"light_flame_large_yellow", "progs/flame2.mdl"},
+        {"light_flame_small_yellow", "progs/flame2.mdl"},
+        {"light_flame_small_white", "progs/flame2.mdl"}
     };
 
     for (const auto& ent : m_map->GetEntities()) {
