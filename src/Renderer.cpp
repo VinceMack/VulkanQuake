@@ -47,6 +47,7 @@ Renderer::~Renderer() {
     vkDestroyPipelineLayout(m_vkbDevice.device, m_pipelineLayout, nullptr);
     vkDestroyPipeline(m_vkbDevice.device, m_modelPipeline, nullptr);
     vkDestroyPipelineLayout(m_vkbDevice.device, m_modelPipelineLayout, nullptr);
+    vkDestroyPipeline(m_vkbDevice.device, m_uiPipeline, nullptr);
     vkDestroyDescriptorSetLayout(m_vkbDevice.device, m_modelDescriptorLayout, nullptr);
     if (m_modelDescriptorPool) vkDestroyDescriptorPool(m_vkbDevice.device, m_modelDescriptorPool, nullptr);
     vkDestroyRenderPass(m_vkbDevice.device, m_renderPass, nullptr);
@@ -66,8 +67,12 @@ Renderer::~Renderer() {
     for (auto& buffer : m_dynamicIndexBuffers) {
         buffer.Destroy();
     }
+    for (auto& buffer : m_dynamicUIBuffers) {
+        buffer.Destroy();
+    }
     for (auto& tex : m_gpuTextures) tex.Destroy();
     m_lightmapAtlasTexture.Destroy(); // Safely destroy the Atlas here!
+    m_fontTexture.Destroy();
     for (auto& mdl : m_gpuAliasModels) {
         mdl.vertexBuffer.Destroy();
         mdl.indexBuffer.Destroy();
@@ -85,11 +90,14 @@ Renderer::~Renderer() {
 
     // 7. Destroy Core Vulkan & VMA
     if (m_allocator) vmaDestroyAllocator(m_allocator);
+
     vkDestroyShaderModule(m_vkbDevice.device, m_vertShader, nullptr);
     vkDestroyShaderModule(m_vkbDevice.device, m_fragShader, nullptr);
     vkDestroyShaderModule(m_vkbDevice.device, m_modelVertShader, nullptr);
     vkDestroyShaderModule(m_vkbDevice.device, m_modelFragShader, nullptr);
-    
+    vkDestroyShaderModule(m_vkbDevice.device, m_uiVertShader, nullptr);
+    vkDestroyShaderModule(m_vkbDevice.device, m_uiFragShader, nullptr);
+
     vkb::destroy_device(m_vkbDevice);
     vkDestroySurfaceKHR(m_vkbInst.instance, m_surface, nullptr);
     vkb::destroy_instance(m_vkbInst);
@@ -177,6 +185,14 @@ void Renderer::InitPipeline() {
     m_modelPipeline = engine::PipelineSetup::CreateModelGraphicsPipeline(
         m_vkbDevice.device, m_renderPass, m_modelPipelineLayout, m_modelVertShader, m_modelFragShader, m_swapchainExtent);
 
+    std::string uiVertPath = find_shader_directory("ui.vert.spv", m_exeDir).string();
+    std::string uiFragPath = find_shader_directory("ui.frag.spv", m_exeDir).string();
+    m_uiVertShader = engine::Shader::LoadModule(m_vkbDevice.device, uiVertPath);
+    m_uiFragShader = engine::Shader::LoadModule(m_vkbDevice.device, uiFragPath);
+
+    m_uiPipeline = engine::PipelineSetup::CreateUIGraphicsPipeline(
+        m_vkbDevice.device, m_renderPass, m_modelPipelineLayout, m_uiVertShader, m_uiFragShader, m_swapchainExtent);
+
     // Create descriptor pool for alias models (up to 128 models)
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -241,6 +257,12 @@ void Renderer::UploadMap(const Map& map) {
                map.GetMasterIndices().data(), 
                indexBufferSize);
     }
+    
+    size_t uiBufferSize = 10000 * sizeof(engine::UIVertex); // Enough room for ~1600 text characters
+    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
+        m_dynamicUIBuffers.push_back(engine::CreateDynamicBuffer(vkCtx, uiBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
+    }
+
     m_lightmapAtlasTexture = engine::CreateAndUploadImage(vkCtx, map.GetLightmapAtlas());
 
     // Descriptor Sets for Textures
@@ -347,7 +369,39 @@ uint32_t Renderer::UploadAliasModel(const AliasModel& model) {
     return static_cast<uint32_t>(m_gpuAliasModels.size() - 1);
 }
 
-void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, const RenderEntity* viewModel) {
+void Renderer::UploadFont(const TextureData& fontData) {
+    engine::VulkanContext vkCtx = { m_vkbDevice.device, m_allocator, m_graphicsQueue, m_commandPool };
+    m_fontTexture = engine::CreateAndUploadImage(vkCtx, fontData);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    // ---> FIX: Use the dedicated, properly-sized model pool!
+    allocInfo.descriptorPool = m_modelDescriptorPool; 
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &m_modelDescriptorLayout;
+    
+    if (vkAllocateDescriptorSets(m_vkbDevice.device, &allocInfo, &m_fontDescriptorSet) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate font descriptor set!");
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = m_fontTexture.imageView;
+    imageInfo.sampler = m_fontTexture.sampler;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = m_fontDescriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(m_vkbDevice.device, 1, &descriptorWrite, 0, nullptr);
+}
+
+void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
+                         const RenderEntity* viewModel, const std::vector<UIVertex>& uiVertices) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
@@ -504,6 +558,31 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
     }
     // <--- END NEW
+
+    // ---> NEW: 2D UI Pass
+    if (!uiVertices.empty() && m_fontDescriptorSet) {
+        // Copy dynamic UI vertices to the CPU-mapped GPU buffer
+        memcpy(m_dynamicUIBuffers[m_currentFrame].mappedData, uiVertices.data(), uiVertices.size() * sizeof(engine::UIVertex));
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_uiPipeline);
+
+        VkBuffer uiBuffers[] = { m_dynamicUIBuffers[m_currentFrame].buffer };
+        VkDeviceSize uiOffsets[] = { 0 };
+        vkCmdBindVertexBuffers(cmd, 0, 1, uiBuffers, uiOffsets);
+
+        // Create Ortho Matrix for pixel-perfect 2D rendering (0,0 is top-left)
+        glm::mat4 ortho = glm::ortho(0.0f, (float)m_swapchainExtent.width, 0.0f, (float)m_swapchainExtent.height, -1.0f, 1.0f);
+        
+        ModelPushConstants pc;
+        pc.renderMatrix = ortho;
+        pc.interp = 0.0f;
+        
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &m_fontDescriptorSet, 0, nullptr);
+        
+        // Draw all UI vertices (no index buffer needed for standard arrays)
+        vkCmdDraw(cmd, static_cast<uint32_t>(uiVertices.size()), 1, 0, 0);
+    }
 
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);

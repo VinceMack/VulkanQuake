@@ -5,6 +5,7 @@
 namespace engine {
 
 class Player;
+class Console;
 
 class Window {
 public:
@@ -16,7 +17,7 @@ public:
     Window& operator=(const Window&) = delete;
 
     // Polling and Input
-    void PollEvents(bool& isRunning, Player* player = nullptr);
+    void PollEvents(bool& isRunning, Player* player = nullptr, Console* console = nullptr);
     void CaptureMouse(bool capture);
 
     // Getters for Vulkan

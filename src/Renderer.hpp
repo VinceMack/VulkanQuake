@@ -7,6 +7,7 @@
 #include "PipelineSetup.hpp"
 #include "RenderEntity.hpp"
 #include "AliasModel.hpp"
+#include "UI.hpp"
 
 #include <vulkan/vulkan.h>
 #include <VkBootstrap.h>
@@ -32,7 +33,10 @@ public:
     uint32_t UploadAliasModel(const AliasModel& model);
     
     // The main Render Loop execution
-    void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, const RenderEntity* viewModel = nullptr);
+    void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
+                   const RenderEntity* viewModel = nullptr, const std::vector<UIVertex>& uiVertices = {});
+
+    void UploadFont(const TextureData& fontData);
 
 private:
     void InitVulkan();
@@ -117,6 +121,14 @@ private:
     VkPipeline m_modelPipeline = VK_NULL_HANDLE;
     VkShaderModule m_modelVertShader = VK_NULL_HANDLE;
     VkShaderModule m_modelFragShader = VK_NULL_HANDLE;
+
+    std::vector<engine::GpuBuffer> m_dynamicUIBuffers;
+    engine::GpuImage m_fontTexture;
+    VkDescriptorSet m_fontDescriptorSet = VK_NULL_HANDLE;
+    
+    VkPipeline m_uiPipeline = VK_NULL_HANDLE;
+    VkShaderModule m_uiVertShader = VK_NULL_HANDLE;
+    VkShaderModule m_uiFragShader = VK_NULL_HANDLE;
     
     std::vector<GpuAliasModel> m_gpuAliasModels; // Stores our uploaded models
 };

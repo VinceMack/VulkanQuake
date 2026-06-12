@@ -7,6 +7,7 @@
 #include "Player.hpp"
 #include "RenderEntity.hpp"
 #include "VirtualFileSystem.hpp"
+#include "Console.hpp"
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -39,6 +40,7 @@ private:
     std::vector<RenderEntity> m_renderEntities;
     std::unordered_map<std::string, uint32_t> m_modelCache;
     RenderEntity m_viewModel;
+    std::unique_ptr<Console> m_console;
     
     bool m_isRunning = false;
 };

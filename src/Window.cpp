@@ -1,5 +1,6 @@
 #include "Window.hpp"
 #include "Player.hpp"
+#include "Console.hpp"
 #include <SDL3/SDL_vulkan.h>
 #include <stdexcept>
 
@@ -25,20 +26,43 @@ Window::~Window() {
     SDL_Quit();
 }
 
-void Window::PollEvents(bool& isRunning, Player* player) {
+void Window::PollEvents(bool& isRunning, Player* player, Console* console) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_EVENT_QUIT) {
-            isRunning = false;
-        }
-        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_ESCAPE) {
-            isRunning = false;
+        if (e.type == SDL_EVENT_QUIT) isRunning = false;
+        
+        if (e.type == SDL_EVENT_KEY_DOWN) {
+            // Hard quit on ESC for now
+            if (e.key.key == SDLK_ESCAPE) isRunning = false;
+
+            // Toggle Console on Tilde/Grave
+            if (e.key.key == SDLK_GRAVE) {
+                if (console) {
+                    console->Toggle();
+                    // Release the mouse to the OS if console is active
+                    SDL_SetWindowRelativeMouseMode(m_window, !console->IsActive());
+                }
+            }
+            
+            if (console && console->IsActive()) {
+                // Console control keys
+                if (e.key.key == SDLK_BACKSPACE) {
+                    console->Backspace();
+                } else if (e.key.key == SDLK_RETURN || e.key.key == SDLK_RETURN2) {
+                    console->ExecuteCommand();
+                }
+            }
         }
         
-        // Toggle Noclip on the N key!
-        if (e.type == SDL_EVENT_KEY_DOWN && e.key.key == SDLK_N) {
-            if (player) {
-                player->ToggleNoclip();
+        // Literal Text Input for the console typing
+        if (e.type == SDL_EVENT_TEXT_INPUT) {
+            if (console && console->IsActive()) {
+                for (int i = 0; e.text.text[i] != '\0'; i++) {
+                    // Ignore the backtick character so it doesn't print when opening the console!
+                    if (e.text.text[i] != '`') {
+                        console->CharInput(e.text.text[i]);
+                    }
+                }
             }
         }
     }

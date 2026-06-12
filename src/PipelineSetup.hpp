@@ -43,6 +43,11 @@ public:
     static VkPipeline CreateModelGraphicsPipeline(VkDevice device, VkRenderPass renderPass, 
                                                   VkPipelineLayout layout, VkShaderModule vertShader, 
                                                   VkShaderModule fragShader, VkExtent2D extent);
+
+    // The graphics pipeline tailored for 2D UIVertex (No depth testing, Alpha Blending ON)
+    static VkPipeline CreateUIGraphicsPipeline(VkDevice device, VkRenderPass renderPass, 
+                                               VkPipelineLayout layout, VkShaderModule vertShader, 
+                                               VkShaderModule fragShader, VkExtent2D extent);
 };
 
 } // namespace engine

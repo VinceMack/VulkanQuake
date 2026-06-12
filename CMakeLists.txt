@@ -45,6 +45,8 @@ set(SHADER_FILES
     shaders/mesh.frag
     shaders/model.vert
     shaders/model.frag
+    shaders/ui.vert
+    shaders/ui.frag
 )
 
 set(SPIRV_FILES "")
@@ -75,6 +77,8 @@ add_executable(VulkanQuake
     src/MdlFormat.hpp
     src/Camera.cpp
     src/Camera.hpp
+    src/Console.cpp
+    src/Console.hpp
     src/Engine.cpp
     src/Engine.hpp
     src/Entity.cpp
@@ -97,6 +101,7 @@ add_executable(VulkanQuake
     src/Renderer.cpp
     src/Renderer.hpp
     src/Shader.hpp
+    src/UI.hpp
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
     src/vk_mem_alloc.cpp

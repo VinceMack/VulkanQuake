@@ -1,6 +1,7 @@
 #include "Engine.hpp"
 #include "AliasModel.hpp"
 #include "VirtualFileSystem.hpp"
+#include "UI.hpp"
 #include <iostream>
 #include <filesystem>
 #include <stdexcept>
@@ -115,6 +116,83 @@ void Engine::Init() {
         // Hand the map over to the Renderer so it can upload everything to VRAM
         m_renderer->UploadMap(*m_map);
 
+        // ---> NEW: Extract Font Atlas from gfx.wad inside pak0.pak
+        std::vector<uint8_t> concharsBytes;
+        auto wadData = vfs.ReadFile("gfx.wad");
+        if (wadData) {
+#pragma pack(push, 1)
+            struct WadHeader {
+                char magic[4];
+                int32_t numentries;
+                int32_t diroffset;
+            };
+            struct WadEntry {
+                int32_t offset;
+                int32_t dsize;
+                int32_t size;
+                char type;
+                char cmprs;
+                int16_t dummy;
+                char name[16];
+            };
+#pragma pack(pop)
+
+            if (wadData->size() >= sizeof(WadHeader)) {
+                const WadHeader* header = reinterpret_cast<const WadHeader*>(wadData->data());
+                if (std::string(header->magic, 4) == "WAD2") {
+                    int32_t dirOffset = header->diroffset;
+                    int32_t numEntries = header->numentries;
+                    
+                    for (int32_t i = 0; i < numEntries; i++) {
+                        size_t entryPos = dirOffset + i * sizeof(WadEntry);
+                        if (entryPos + sizeof(WadEntry) <= wadData->size()) {
+                            const WadEntry* entry = reinterpret_cast<const WadEntry*>(wadData->data() + entryPos);
+                            std::string entryName(entry->name);
+                            // Convert to lowercase for comparison
+                            std::transform(entryName.begin(), entryName.end(), entryName.begin(),
+                                           [](unsigned char c) { return std::tolower(c); });
+                            if (entryName == "conchars") {
+                                if (entry->offset + entry->size <= wadData->size()) {
+                                    concharsBytes.resize(entry->size);
+                                    std::memcpy(concharsBytes.data(), wadData->data() + entry->offset, entry->size);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            std::cerr << "ERROR: Failed to read gfx.wad from VFS! Error code: " 
+                      << static_cast<int>(wadData.error()) << "\n";
+        }
+
+        if (!concharsBytes.empty() && paletteData) {
+            engine::TextureData fontData;
+            fontData.name = "conchars";
+            fontData.width = 128;
+            fontData.height = 128;
+            fontData.pixelsRGBA.resize(128 * 128 * 4);
+            
+            const uint8_t* pal = reinterpret_cast<const uint8_t*>(paletteData->data());
+            
+            for (size_t i = 0; i < 16384; ++i) { // 128x128 = 16384 bytes
+                uint8_t colorIndex = concharsBytes[i];
+                
+                // Font uses index 0 for transparent backgrounds!
+                bool isTransparent = (colorIndex == 0); 
+                
+                fontData.pixelsRGBA[i * 4 + 0] = static_cast<std::byte>(pal[colorIndex * 3 + 0]);
+                fontData.pixelsRGBA[i * 4 + 1] = static_cast<std::byte>(pal[colorIndex * 3 + 1]);
+                fontData.pixelsRGBA[i * 4 + 2] = static_cast<std::byte>(pal[colorIndex * 3 + 2]);
+                fontData.pixelsRGBA[i * 4 + 3] = isTransparent ? std::byte{0} : std::byte{255};
+            }
+            m_renderer->UploadFont(fontData);
+            std::cout << "Successfully uploaded Quake Font (extracted from gfx.wad)\n";
+        } else if (concharsBytes.empty()) {
+            std::cerr << "ERROR: CONCHARS lump was not found inside gfx.wad!\n";
+        }
+
         // Initialize Physics and Player
         m_physics = std::make_unique<Physics>(m_map.get());
         m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
@@ -218,6 +296,36 @@ void Engine::Init() {
         m_viewModel.nextFrame = 0; // Don't animate the gun just yet
         m_viewModel.interp = 0.0f;
 
+    m_console = std::make_unique<Console>();
+    SDL_StartTextInput(m_window->GetHandle()); // Tell OS to capture text!
+
+    // ========================================================================
+    // ---> NEW: Register Console Commands
+    // ========================================================================
+    
+    // Noclip Command
+    m_console->RegisterCommand("noclip", [this](const std::vector<std::string>& args) {
+        if (m_player) {
+            m_player->ToggleNoclip();
+            if (m_player->IsNoclip()) {
+                m_console->Print("noclip ON");
+            } else {
+                m_console->Print("noclip OFF");
+            }
+        }
+    });
+
+    // Quit Command
+    m_console->RegisterCommand("quit", [this](const std::vector<std::string>& args) {
+        m_console->Print("Quitting...");
+        m_isRunning = false; // This will safely break the MainLoop
+    });
+
+    // Clear Command (Bonus!)
+    m_console->RegisterCommand("clear", [this](const std::vector<std::string>& args) {
+        m_console->Clear();
+    });
+
     m_isRunning = true;
 }
 
@@ -230,8 +338,8 @@ void Engine::MainLoop() {
     uint64_t lastTime = SDL_GetTicks();
 
     while (m_isRunning) {
-        // 1. Process Window Events
-        m_window->PollEvents(m_isRunning, m_player.get());
+        // Pass the console to PollEvents
+        m_window->PollEvents(m_isRunning, m_player.get(), m_console.get());
 
         // 2. Calculate Delta Time
         uint64_t currentTime = SDL_GetTicks();
@@ -239,30 +347,30 @@ void Engine::MainLoop() {
         lastTime = currentTime;
 
         // 3. Process Input
-        float mouseX = 0.0f, mouseY = 0.0f;
-        SDL_GetRelativeMouseState(&mouseX, &mouseY);
-        m_player->ProcessMouse(mouseX, mouseY); // <--- Goes to player now
-
-        const bool* keys = SDL_GetKeyboardState(NULL);
-        
-        // Populate UserCmd (Quake's player movement command)
         UserCmd cmd{};
         cmd.msec = deltaTime;
         cmd.yaw = m_camera->GetYaw();
-        cmd.pitch = m_camera->GetPitch(); // <--- NEW: Crucial for noclip flight!
+        cmd.pitch = m_camera->GetPitch();
+        cmd.forwardmove = 0.0f;
+        cmd.sidemove = 0.0f;
+        cmd.upmove = 0.0f;
 
-        // Standard movement scales
-        // cl_forwardspeed = 200 * cl_movespeedkey(2.0) = 400
-        // cl_sidespeed = 350
-        if (keys[SDL_SCANCODE_W]) cmd.forwardmove += 400.0f;
-        if (keys[SDL_SCANCODE_S]) cmd.forwardmove -= 400.0f;
-        
-        // ---> FIX: Asymmetric sidemove
-        if (keys[SDL_SCANCODE_D]) cmd.sidemove += 350.0f;
-        if (keys[SDL_SCANCODE_A]) cmd.sidemove -= 350.0f;
-        
-        // Handle jump using Spacebar
-        if (keys[SDL_SCANCODE_SPACE]) cmd.upmove = 400.0f;
+        // ---> NEW: Block game input if the console is open!
+        if (!m_console->IsActive()) {
+            float mouseX = 0.0f, mouseY = 0.0f;
+            SDL_GetRelativeMouseState(&mouseX, &mouseY);
+            m_player->ProcessMouse(mouseX, mouseY);
+
+            cmd.yaw = m_camera->GetYaw();     
+            cmd.pitch = m_camera->GetPitch(); 
+
+            const bool* keys = SDL_GetKeyboardState(NULL);
+            if (keys[SDL_SCANCODE_W]) cmd.forwardmove += 400.0f;
+            if (keys[SDL_SCANCODE_S]) cmd.forwardmove -= 400.0f;
+            if (keys[SDL_SCANCODE_D]) cmd.sidemove += 350.0f;
+            if (keys[SDL_SCANCODE_A]) cmd.sidemove -= 350.0f;
+            if (keys[SDL_SCANCODE_SPACE]) cmd.upmove = 400.0f;
+        }
 
         // Player Physics Tick using UserCmd
         m_player->TickPhysics(cmd, m_renderEntities);
@@ -284,8 +392,12 @@ void Engine::MainLoop() {
             }
         }
 
+        // ---> NEW: Generate Console Geometry instead of the Test Quad
+        std::vector<UIVertex> uiVerts;
+        m_console->GenerateGeometry(uiVerts, 1280.0f, 720.0f);
+
         // 4. Render
-        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel);
+        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts);
     }
 }
 
