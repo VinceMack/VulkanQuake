@@ -4,6 +4,7 @@
 #include <iostream>
 #include <filesystem>
 #include <stdexcept>
+#include <cstdlib>
 #include <SDL3/SDL.h>
 
 // Helper functions for locating data
@@ -46,6 +47,34 @@ Engine::Engine() {
 Engine::~Engine() {
     std::cout << "Shutting down Engine...\n";
     // unique_ptrs automatically tear down Renderer, then Window.
+}
+
+uint32_t Engine::LoadAliasModel(const std::string& path, engine::vfs::VirtualFileSystem& vfs, std::span<const std::byte> palette) {
+    // Check if we already loaded it
+    auto it = m_modelCache.find(path);
+    if (it != m_modelCache.end()) {
+        return it->second;
+    }
+
+    // Try to read it from the PAK file
+    auto data = vfs.ReadFile(path);
+    if (!data) {
+        std::cerr << "WARNING: Could not read " << path << " from VFS.\n";
+        m_modelCache[path] = 0; // Cache the failure as 0 so we don't spam the VFS
+        return 0;
+    }
+
+    try {
+        engine::AliasModel model(*data, palette);
+        uint32_t modelId = m_renderer->UploadAliasModel(model);
+        m_modelCache[path] = modelId;
+        std::cout << "Cached " << path << " as Model ID " << modelId << "\n";
+        return modelId;
+    } catch (const std::exception& e) {
+        std::cerr << "Failed to parse " << path << ": " << e.what() << "\n";
+        m_modelCache[path] = 0;
+        return 0;
+    }
 }
 
 void Engine::Init() {
@@ -97,6 +126,31 @@ void Engine::Init() {
         float spawnAngle = 0.0f;
         bool foundSpawn = false;
 
+        // ---> NEW: Dictionary of Quake 1 Classnames to MDL files
+        std::unordered_map<std::string, std::string> classnameToMdl = {
+            {"monster_army", "progs/soldier.mdl"},
+            {"monster_dog", "progs/h_dog.mdl"},
+            {"monster_ogre", "progs/ogre.mdl"},
+            {"monster_demon1", "progs/demon.mdl"},
+            {"monster_shambler", "progs/shambler.mdl"},
+            {"monster_knight", "progs/knight.mdl"},
+            {"monster_zombie", "progs/zombie.mdl"},
+            {"item_armor1", "progs/armor.mdl"},
+            {"item_armor2", "progs/armor.mdl"},
+            {"item_armorInv", "progs/armor.mdl"},
+            {"weapon_nailgun", "progs/g_nail.mdl"},
+            {"weapon_supershotgun", "progs/g_shot.mdl"},
+            {"weapon_supernailgun", "progs/g_nail2.mdl"},
+            {"weapon_rocketlauncher", "progs/g_rock.mdl"},
+            {"weapon_grenadelauncher", "progs/g_rock.mdl"},
+            {"weapon_lightning", "progs/g_light.mdl"},
+            {"item_shells", "progs/m_shell.mdl"},
+            {"item_spikes", "progs/m_nail.mdl"},
+            {"item_rockets", "progs/m_rock.mdl"},
+            {"item_cells", "progs/m_light.mdl"},
+            {"item_health", "progs/m_health.mdl"} // Megahealth
+        };
+
         for (const auto& ent : m_map->GetEntities()) {
             std::string cls = ent.GetClassname();
 
@@ -107,21 +161,42 @@ void Engine::Init() {
                 foundSpawn = true;
             }
             
-            // 2. Simulate Server sending Brush Entities to the Client.
-            // Any entity with a "model" key starting with "*" is a BSP Sub-Model.
+            // 2. Brush Entities (Doors/Elevators)
             std::string modelStr = ent.GetString("model");
             if (!modelStr.empty() && modelStr[0] == '*') {
                 RenderEntity rent;
-                rent.modelId = std::stoi(modelStr.substr(1));
                 rent.type = EntityModelType::BspBrush;
+                rent.modelId = std::stoi(modelStr.substr(1));
                 rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
-                
-                // rush entities are already rotated correctly in the BSP vertex data.
-                // The "angle" key dictates the logic of which way it slides when opened, NOT its visual rotation
                 rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
-                
                 rent.frame = 0;
                 m_renderEntities.push_back(rent);
+            }
+
+            // 3. Dynamic Alias Models (Monsters & Items)
+            auto it = classnameToMdl.find(cls);
+            if (it != classnameToMdl.end()) {
+                uint32_t mdlId = LoadAliasModel(it->second, vfs, *paletteData);
+                
+                if (mdlId != 0) {
+                    RenderEntity rent;
+                    rent.type = EntityModelType::Alias;
+                    rent.modelId = mdlId;
+                    
+                    // Most Quake models are anchored at the floor
+                    rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
+                    
+                    // Point entities use 'angle' for visual Yaw rotation
+                    rent.angles = glm::vec3(0.0f, ent.GetFloat("angle", 0.0f), 0.0f);
+                    
+                    rent.frame = 0;
+                    rent.nextFrame = 1;
+                    
+                    // Give them a random starting interpolation so they don't animate in perfect unison
+                    rent.interp = static_cast<float>(rand() % 100) / 100.0f;
+
+                    m_renderEntities.push_back(rent);
+                }
             }
         }
 
@@ -132,31 +207,6 @@ void Engine::Init() {
         } else {
             std::cerr << "WARNING: No info_player_start found. Spawning at 0,0,0.\n";
         }
-
-    // Change "armor.mdl" to "shambler.mdl"
-    auto monsterData = vfs.ReadFile("progs/shambler.mdl");
-    if (monsterData && paletteData) {
-        engine::AliasModel monster(*monsterData, *paletteData);
-        uint32_t monsterId = m_renderer->UploadAliasModel(monster);
-
-        float angleRad = glm::radians(spawnAngle);
-        glm::vec3 forwardDir(std::cos(angleRad), std::sin(angleRad), 0.0f);
-        
-        RenderEntity monsterEnt;
-        monsterEnt.type = EntityModelType::Alias;
-        monsterEnt.modelId = monsterId;
-        monsterEnt.origin = spawnOrigin + (forwardDir * 200.0f); 
-        
-        // Face him towards the player
-        monsterEnt.angles = glm::vec3(0.0f, spawnAngle + 180.0f, 0.0f); 
-        
-        monsterEnt.frame = 0;
-        monsterEnt.nextFrame = 1;
-        monsterEnt.interp = 0.0f;
-        
-        m_renderEntities.push_back(monsterEnt);
-        std::cout << "Successfully uploaded and spawned shambler.mdl!\n";
-    }
 
     m_isRunning = true;
 }
@@ -209,16 +259,16 @@ void Engine::MainLoop() {
         // ========================================================================
         // Entity Simulation (The Game Tick)
         // ========================================================================
-        float animationSpeed = 10.0f; // 10 FPS
+        float animationSpeed = 10.0f; // 10 FPS animations
+        
         for (auto& rent : m_renderEntities) {
             if (rent.type == EntityModelType::Alias) {
-                // Animate the Shambler!
+                // Animate the models
                 rent.interp += animationSpeed * deltaTime;
                 if (rent.interp >= 1.0f) {
                     rent.interp -= 1.0f;
                     rent.frame = rent.nextFrame;
                     rent.nextFrame = rent.frame + 1;
-                    // Note: We clamp this inside DrawFrame so it loops perfectly!
                 }
             }
         }
