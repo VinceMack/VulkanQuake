@@ -34,7 +34,8 @@ public:
     
     // The main Render Loop execution
     void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
-                   const RenderEntity* viewModel = nullptr, const std::vector<UIVertex>& uiVertices = {});
+                   const RenderEntity* viewModel = nullptr, const std::vector<UIVertex>& uiVertices = {},
+                   float totalTime = 0.0f);
 
     void UploadFont(const TextureData& fontData);
 
@@ -109,9 +110,12 @@ private:
     std::vector<VkFence> m_inFlightFences;
     std::vector<VkCommandBuffer> m_commandBuffers;
 
-    struct ModelPushConstants {
+    struct RenderPushConstants {
         glm::mat4 renderMatrix;
-        float interp;
+        glm::vec3 cameraPos;
+        float timeOrInterp;
+        uint32_t surfaceType;
+        float padding[11]; // Pads to exactly 128 bytes
     };
 
     struct GpuAliasModel {

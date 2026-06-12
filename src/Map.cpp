@@ -85,6 +85,16 @@ void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::by
 
         const bsp::BspMiptex* miptex = reinterpret_cast<const bsp::BspMiptex*>(texLumpStart + offsets[i]);
         td.name = miptex->name;
+
+        // ---> NEW: Tag the surface type
+        if (td.name.size() >= 3 && td.name.compare(0, 3, "sky") == 0) {
+            td.surfaceType = 2; // Sky
+        } else if (!td.name.empty() && td.name[0] == '*') {
+            td.surfaceType = 1; // Liquid
+        } else {
+            td.surfaceType = 0; // Normal
+        }
+
         td.width = miptex->width;
         td.height = miptex->height;
 
@@ -98,8 +108,14 @@ void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::by
         for (uint32_t p = 0; p < numPixels; ++p) {
             uint8_t colorIndex = pixels8[p];
             
-            // Quake maps color index 255 to completely transparent.
-            bool isTransparent = (colorIndex == 255);
+            // ---> UPDATED: For skies, index 0 is transparent so the back clouds show through!
+            // (Note: BSP diffuses DO NOT use 255 for transparency, only Alias models do!)
+            bool isTransparent = false;
+            if (td.surfaceType == 2 && colorIndex == 0) {
+                isTransparent = true;
+            } else if (colorIndex == 255) {
+                isTransparent = true;
+            }
 
             td.pixelsRGBA[p * 4 + 0] = static_cast<std::byte>(pal[colorIndex * 3 + 0]); // R
             td.pixelsRGBA[p * 4 + 1] = static_cast<std::byte>(pal[colorIndex * 3 + 1]); // G
@@ -337,6 +353,7 @@ void Map::TriangulateFaces() {
             batch.textureId = t;
             batch.firstIndex = static_cast<uint32_t>(m_masterIndices.size());
             batch.indexCount = static_cast<uint32_t>(modelIndicesByTex[t].size());
+            batch.surfaceType = m_textures[t].surfaceType; // <--- NEW!
             
             m_subModels[m].batches.push_back(batch);
             
@@ -450,6 +467,7 @@ void Map::BuildVisibleBatches(const glm::vec3& cameraPos, std::vector<uint32_t>&
         batch.textureId = t;
         batch.firstIndex = static_cast<uint32_t>(outIndices.size());
         batch.indexCount = static_cast<uint32_t>(indicesByTexture[t].size());
+        batch.surfaceType = m_textures[t].surfaceType; // <--- NEW!
         
         outBatches.push_back(batch);
         outIndices.insert(outIndices.end(), indicesByTexture[t].begin(), indicesByTexture[t].end());

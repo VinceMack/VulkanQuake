@@ -414,7 +414,8 @@ void Engine::MainLoop() {
         m_console->GenerateGeometry(uiVerts, 1280.0f, 720.0f);
 
         // 4. Render
-        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts);
+        float totalTime = SDL_GetTicks() / 1000.0f;
+        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts, totalTime);
     }
 }
 

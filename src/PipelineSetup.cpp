@@ -149,8 +149,10 @@ std::vector<VkFramebuffer> PipelineSetup::CreateFramebuffers(VkDevice device, Vk
 VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, uint32_t pushConstantSize) {
     VkPushConstantRange pushConstant{};
     pushConstant.offset = 0;
-    pushConstant.size = pushConstantSize; // Space for our Push Constants
-    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstant.size = 128; // <--- Force 128 bytes universally
+    
+    // ---> Grant access to BOTH Vertex and Fragment shaders
+    pushConstant.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

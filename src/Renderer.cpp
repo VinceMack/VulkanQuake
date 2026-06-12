@@ -182,7 +182,7 @@ void Renderer::InitPipeline() {
     m_graphicsPipeline = engine::PipelineSetup::CreateGraphicsPipeline(m_vkbDevice.device, m_renderPass, m_pipelineLayout, m_vertShader, m_fragShader, m_swapchainExtent);
 
     m_modelDescriptorLayout = engine::PipelineSetup::CreateSingleTextureDescriptorLayout(m_vkbDevice.device);
-    m_modelPipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_modelDescriptorLayout, sizeof(ModelPushConstants));
+    m_modelPipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_modelDescriptorLayout, sizeof(RenderPushConstants));
     m_modelPipeline = engine::PipelineSetup::CreateModelGraphicsPipeline(
         m_vkbDevice.device, m_renderPass, m_modelPipelineLayout, m_modelVertShader, m_modelFragShader, m_swapchainExtent);
 
@@ -399,7 +399,8 @@ void Renderer::UploadFont(const TextureData& fontData) {
 }
 
 void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
-                         const RenderEntity* viewModel, const std::vector<UIVertex>& uiVertices) {
+                         const RenderEntity* viewModel, const std::vector<UIVertex>& uiVertices,
+                         float totalTime) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
@@ -452,11 +453,20 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 proj = glm::perspective(glm::radians(75.0f), (float)m_swapchainExtent.width / (float)m_swapchainExtent.height, 0.1f, 10000.0f);
     proj[1][1] *= -1; 
-    glm::mat4 mvp = proj * view;
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp);
 
     // Use the dynamically built batches
     for (const auto& batch : visibleBatches) {
+        // For the static map batches
+        RenderPushConstants pc{};
+        pc.renderMatrix = proj * view;
+        pc.cameraPos = camera.GetPosition();
+        pc.timeOrInterp = totalTime;
+        pc.surfaceType = batch.surfaceType;
+
+        vkCmdPushConstants(cmd, m_pipelineLayout, 
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                           0, sizeof(RenderPushConstants), &pc);
+
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
         vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
     }
@@ -473,13 +483,19 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         
         // Calculate the specific matrix for THIS door
         glm::mat4 modelMatrix = rent.GetTransformMatrix();
-        glm::mat4 entMvp = proj * view * modelMatrix;
         
-        // Push the new matrix to the GPU
-        vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &entMvp);
-
         // Draw the door's batches
         for (const auto& batch : subModel.batches) {
+            RenderPushConstants pc{};
+            pc.renderMatrix = proj * view * modelMatrix;
+            pc.cameraPos = camera.GetPosition();
+            pc.timeOrInterp = totalTime;
+            pc.surfaceType = batch.surfaceType;
+
+            vkCmdPushConstants(cmd, m_pipelineLayout, 
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                               0, sizeof(RenderPushConstants), &pc);
+
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 1, &m_descriptorSets[batch.textureId], 0, nullptr);
             vkCmdDrawIndexed(cmd, batch.indexCount, 1, batch.firstIndex, 0, 0);
         }
@@ -508,11 +524,16 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         vkCmdBindVertexBuffers(cmd, 0, 2, vBuffers, vOffsets);
         vkCmdBindIndexBuffer(cmd, gpuModel.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
 
-        ModelPushConstants pc;
+        // For the dynamic entities
+        RenderPushConstants pc{};
         pc.renderMatrix = proj * view * rent.GetTransformMatrix();
-        pc.interp = rent.interp;
+        pc.cameraPos = camera.GetPosition();
+        pc.timeOrInterp = rent.interp;
+        pc.surfaceType = 0; // Models don't use liquid warping or sky scrolling
         
-        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, 
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                           0, sizeof(RenderPushConstants), &pc);
 
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &gpuModel.descriptorSet, 0, nullptr);
         vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
@@ -550,11 +571,15 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         // 3. The Math Hack: We lock the camera at (0,0,0) looking down the X-axis
         glm::mat4 viewIdent = glm::lookAt(glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         
-        ModelPushConstants pc;
+        RenderPushConstants pc{};
         pc.renderMatrix = proj * viewIdent * viewModel->GetTransformMatrix();
-        pc.interp = viewModel->interp;
+        pc.cameraPos = camera.GetPosition();
+        pc.timeOrInterp = viewModel->interp;
+        pc.surfaceType = 0;
         
-        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, 
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                           0, sizeof(RenderPushConstants), &pc);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &gpuModel.descriptorSet, 0, nullptr);
         vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
     }
@@ -574,11 +599,15 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         // Create Ortho Matrix for pixel-perfect 2D rendering (0,0 is top-left)
         glm::mat4 ortho = glm::ortho(0.0f, (float)m_swapchainExtent.width, 0.0f, (float)m_swapchainExtent.height, -1.0f, 1.0f);
         
-        ModelPushConstants pc;
+        RenderPushConstants pc{};
         pc.renderMatrix = ortho;
-        pc.interp = 0.0f;
+        pc.cameraPos = glm::vec3(0.0f);
+        pc.timeOrInterp = 0.0f;
+        pc.surfaceType = 0;
         
-        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, 
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+                           0, sizeof(RenderPushConstants), &pc);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &m_fontDescriptorSet, 0, nullptr);
         
         // Draw all UI vertices (no index buffer needed for standard arrays)

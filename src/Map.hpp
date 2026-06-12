@@ -24,12 +24,14 @@ struct TextureData {
     uint32_t width = 0;
     uint32_t height = 0;
     std::vector<std::byte> pixelsRGBA; 
+    uint32_t surfaceType = 0; // <--- NEW (0=Normal, 1=Liquid, 2=Sky)
 };
 
 struct RenderBatch {
     uint32_t textureId;
     uint32_t firstIndex;
     uint32_t indexCount;
+    uint32_t surfaceType = 0; // <--- NEW
 };
 
 struct FaceData {
