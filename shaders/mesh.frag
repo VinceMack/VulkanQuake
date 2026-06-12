@@ -3,11 +3,18 @@
 layout(location = 0) in vec2 fragUV;
 layout(location = 1) in vec2 fragLightmapUV;
 layout(location = 2) in vec3 fragWorldPos;
+layout(location = 3) in flat uvec4 fragStyles; // <--- Received from vertex shader
 
 layout(location = 0) out vec4 outColor;
 
-layout(binding = 0) uniform sampler2D diffuseSampler;
-layout(binding = 1) uniform sampler2D lightmapSampler;
+// Diffuse and Lightmap textures are still in Set 0
+layout(set = 0, binding = 0) uniform sampler2D diffuseSampler;
+layout(set = 0, binding = 1) uniform sampler2D lightmapSampler;
+
+// ---> NEW: The 64 animated lightstyle floats are in Set 1
+layout(set = 1, binding = 0) uniform Lightstyles {
+    float values[64];
+} ubo;
 
 layout(push_constant) uniform PushConstants {
     mat4 renderMatrix;
@@ -17,53 +24,44 @@ layout(push_constant) uniform PushConstants {
 } pcs;
 
 void main() {
-    // ========================================================
-    // 1. SKYBOX LOGIC (Dual Parallax)
-    // ========================================================
+    // 1. Skybox Logic (Unchanged from previous step)
     if (pcs.surfaceType == 2) {
-        // Calculate the view direction from the camera to this pixel
         vec3 viewDir = normalize(fragWorldPos - pcs.cameraPos);
-        
-        // Quake planar sky projection
         vec2 skyUV = viewDir.xy * 1.5; 
-        
-        // Scroll the background clouds slowly, and foreground clouds faster
         vec2 bgUV = skyUV + vec2(pcs.timeOrInterp * 0.02, pcs.timeOrInterp * 0.01);
         vec2 fgUV = skyUV + vec2(pcs.timeOrInterp * 0.06, pcs.timeOrInterp * 0.03);
-        
-        // The Quake sky texture is stacked vertically. 
-        // Bottom half (0.5 to 1.0) is BG. Top half (0.0 to 0.5) is FG.
         bgUV.t = fract(bgUV.t) * 0.5 + 0.5;
         fgUV.t = fract(fgUV.t) * 0.5;
-        
         vec4 bgColor = texture(diffuseSampler, bgUV);
         vec4 fgColor = texture(diffuseSampler, fgUV);
-        
-        // If foreground is transparent, draw background!
-        if (fgColor.a < 0.1) {
-            outColor = bgColor;
-        } else {
-            outColor = fgColor;
-        }
-        return; // Skies are fullbright, skip lightmaps!
+        outColor = (fgColor.a < 0.1) ? bgColor : fgColor;
+        return; 
     }
 
-    // ========================================================
-    // 2. LIQUID WARPING LOGIC
-    // ========================================================
+    // 2. Liquid Warping (Unchanged from previous step)
     vec2 finalUV = fragUV;
-    
     if (pcs.surfaceType == 1) {
-        // Quake's signature sine-wave distortion, mapped to world coordinates
         float warpX = sin(fragWorldPos.y * 0.05 + pcs.timeOrInterp * 3.0) * 0.05;
         float warpY = sin(fragWorldPos.x * 0.05 + pcs.timeOrInterp * 3.0) * 0.05;
         finalUV += vec2(warpX, warpY);
     }
 
-    // ========================================================
-    // 3. NORMAL DRAWING
-    // ========================================================
+    // 3. Normal Drawing with Animated Lightstyles!
     vec4 diffuseColor = texture(diffuseSampler, finalUV);
-    vec4 lightmapColor = texture(lightmapSampler, fragLightmapUV);
-    outColor = diffuseColor * lightmapColor * 1.5;
+    vec4 lm = texture(lightmapSampler, fragLightmapUV);
+    
+    // Composite the 4 shadow layers using the UBO array
+    float brightness = 0.0;
+    if (fragStyles.x != 255) brightness += lm.r * ubo.values[fragStyles.x];
+    if (fragStyles.y != 255) brightness += lm.g * ubo.values[fragStyles.y];
+    if (fragStyles.z != 255) brightness += lm.b * ubo.values[fragStyles.z];
+    if (fragStyles.w != 255) brightness += lm.a * ubo.values[fragStyles.w];
+
+    // If no lightstyles are active (water, slime, lava, or fallback geometry) or if it's a liquid, use the fallback lightmap value (lm.r)
+    if (pcs.surfaceType == 1 || (fragStyles.x == 255 && fragStyles.y == 255 && fragStyles.z == 255 && fragStyles.w == 255)) {
+        brightness = lm.r;
+    }
+
+    // Multiply the diffuse texture by our dynamic shadow brightness
+    outColor = diffuseColor * brightness * 1.5;
 }

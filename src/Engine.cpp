@@ -82,6 +82,22 @@ uint32_t Engine::LoadAliasModel(const std::string& path, std::span<const std::by
 
 void Engine::Init() {
     std::cout << "Initializing Engine...\n";
+
+    // Initialize lightstyles
+    for (int i = 0; i < 64; ++i) m_lightstyles[i] = "m";
+    m_lightstyles[0] = "m"; // Normal
+    m_lightstyles[1] = "mmnmmommommnonmmonqnmmo"; // Flicker
+    m_lightstyles[2] = "abcdefghijklmnopqrstuvwxyzyxwvutsrqponmlkjihgfedcba"; // Slow strong pulse
+    m_lightstyles[3] = "mmmmmaaaaammmmmaaaaaabcdefgabcdefg"; // Candle
+    m_lightstyles[4] = "mamamamamama"; // Fast strobe
+    m_lightstyles[5] = "jklmnopqrstuvwxyzyxwvutsrqponmlkj"; // Gentle pulse
+    m_lightstyles[6] = "nmonqnmomnmomomno"; // Flicker 2
+    m_lightstyles[7] = "mmmaaaabcdefgmmmmaaaammmaamm"; // Candle 2
+    m_lightstyles[8] = "mmmaaammmaaammmabcdefaaaammmmabcdefmmmaaaa"; // Candle 3
+    m_lightstyles[9] = "aaaaaaaazzzzzzzz"; // Slow strobe
+    m_lightstyles[10] = "mmamammmmammamamaaamammma"; // Fluorescent
+    m_lightstyles[11] = "abcdefghijklmnopqrs"; // Slow pulse (no fade back)
+
     m_window = std::make_unique<Window>("VulkanQuake", 1280, 720);
     m_camera = std::make_unique<Camera>(glm::vec3(0.0f));
 
@@ -415,7 +431,20 @@ void Engine::MainLoop() {
 
         // 4. Render
         float totalTime = SDL_GetTicks() / 1000.0f;
-        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts, totalTime);
+
+        // Calculate Lightstyles! (Updates at 10 FPS)
+        float lightstyleValues[64];
+        for (int i = 0; i < 64; ++i) {
+            if (m_lightstyles[i].empty()) {
+                lightstyleValues[i] = 1.0f;
+            } else {
+                int frame = static_cast<int>(totalTime * 10.0f) % m_lightstyles[i].length();
+                // 'm' is 109 in ASCII. 'a' is 97. (109-97)/12 = 1.0f.
+                lightstyleValues[i] = (m_lightstyles[i][frame] - 'a') / 12.0f; 
+            }
+        }
+
+        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts, totalTime, lightstyleValues);
     }
 }
 

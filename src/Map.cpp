@@ -256,16 +256,24 @@ void Map::TriangulateFaces() {
             currentAtlasX = atlasX;
             currentAtlasY = atlasY;
             
-            // Copy pixels from BSP Lump 8 into our RGBA Atlas
+            int size = lm_width * lm_height; // Size of ONE lightmap layer
+            
             for (int y = 0; y < lm_height; ++y) {
                 for (int x = 0; x < lm_width; ++x) {
-                    uint8_t brightness = m_bspLighting[face.lightmap_offset + (y * lm_width) + x];
-                    
+                    int p = (y * lm_width) + x;
+                    uint8_t r = 0, g = 0, b = 0, a = 0;
+
+                    // Quake stores consecutive lightmaps sequentially if the style isn't 255!
+                    if (face.lightmap_styles[0] != 255) r = m_bspLighting[face.lightmap_offset + 0 * size + p];
+                    if (face.lightmap_styles[1] != 255) g = m_bspLighting[face.lightmap_offset + 1 * size + p];
+                    if (face.lightmap_styles[2] != 255) b = m_bspLighting[face.lightmap_offset + 2 * size + p];
+                    if (face.lightmap_styles[3] != 255) a = m_bspLighting[face.lightmap_offset + 3 * size + p];
+
                     int atlasPixelIndex = ((currentAtlasY + y) * m_lightmapAtlas.width + (currentAtlasX + x)) * 4;
-                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 0] = static_cast<std::byte>(brightness);
-                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 1] = static_cast<std::byte>(brightness);
-                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 2] = static_cast<std::byte>(brightness);
-                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 3] = std::byte{255};
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 0] = static_cast<std::byte>(r);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 1] = static_cast<std::byte>(g);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 2] = static_cast<std::byte>(b);
+                    m_lightmapAtlas.pixelsRGBA[atlasPixelIndex + 3] = static_cast<std::byte>(a);
                 }
             }
             
@@ -284,6 +292,10 @@ void Map::TriangulateFaces() {
             RenderVertex rv;
             rv.position = glm::vec3(bspVert.x, bspVert.y, bspVert.z);
             rv.textureId = texID;
+            rv.styles[0] = face.lightmap_styles[0];
+            rv.styles[1] = face.lightmap_styles[1];
+            rv.styles[2] = face.lightmap_styles[2];
+            rv.styles[3] = face.lightmap_styles[3];
 
             // Compute UVs using Quake's projection math
             float u = bspVert.x * texInfo.vecS[0] + bspVert.y * texInfo.vecS[1] + bspVert.z * texInfo.vecS[2] + texInfo.distS;

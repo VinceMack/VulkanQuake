@@ -34,8 +34,8 @@ public:
     
     // The main Render Loop execution
     void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
-                   const RenderEntity* viewModel = nullptr, const std::vector<UIVertex>& uiVertices = {},
-                   float totalTime = 0.0f);
+                   const RenderEntity* viewModel, const std::vector<UIVertex>& uiVertices, 
+                   float totalTime, const float* lightstyles);
 
     void UploadFont(const TextureData& fontData);
 
@@ -92,6 +92,11 @@ private:
     VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
     VkShaderModule m_vertShader = VK_NULL_HANDLE;
     VkShaderModule m_fragShader = VK_NULL_HANDLE;
+
+    std::vector<engine::GpuBuffer> m_dynamicLightstyleUBOs;
+    VkDescriptorSetLayout m_globalDescriptorLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_globalDescriptorPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_globalDescriptorSets;
 
     // ========================================================================
     // Map GPU Data

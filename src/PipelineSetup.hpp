@@ -29,7 +29,8 @@ public:
     // Defines external shader variables (like our Camera Matrix Push Constant)
     // Defines the binding layout for our textures
     static VkDescriptorSetLayout CreateDescriptorSetLayout(VkDevice device);
-    static VkPipelineLayout CreatePipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, uint32_t pushConstantSize = sizeof(glm::mat4));
+    static VkDescriptorSetLayout CreateGlobalDescriptorSetLayout(VkDevice device);
+    static VkPipelineLayout CreatePipelineLayout(VkDevice device, const std::vector<VkDescriptorSetLayout>& layouts);
     
     // Bakes the shaders, vertex format, and state into the final GPU state machine
     static VkPipeline CreateGraphicsPipeline(VkDevice device, VkRenderPass renderPass, 

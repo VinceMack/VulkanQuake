@@ -49,6 +49,8 @@ private:
     // ---> NEW: Promote VFS to member variable
     std::unique_ptr<engine::vfs::VirtualFileSystem> m_vfs;
     
+    std::string m_lightstyles[64]; // <--- NEW: Dynamic lightstyle animations
+    
     bool m_showTriggers = false; // <--- NEW
     bool m_isRunning = false;
 };
