@@ -158,6 +158,106 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                 break;
 
             // =======================================================
+            // ---> NEW: Basic Math (Multiply, Divide, Add, Sub)
+            // =======================================================
+            case qc::OP_MUL_F:
+                m_globalData[st.c].f = m_globalData[st.a].f * m_globalData[st.b].f;
+                break;
+            case qc::OP_DIV_F:
+                // Standard Quake allows div by zero (results in INF)
+                m_globalData[st.c].f = m_globalData[st.a].f / m_globalData[st.b].f;
+                break;
+            case qc::OP_ADD_V:
+                m_globalData[st.c + 0].f = m_globalData[st.a + 0].f + m_globalData[st.b + 0].f;
+                m_globalData[st.c + 1].f = m_globalData[st.a + 1].f + m_globalData[st.b + 1].f;
+                m_globalData[st.c + 2].f = m_globalData[st.a + 2].f + m_globalData[st.b + 2].f;
+                break;
+            case qc::OP_SUB_V:
+                m_globalData[st.c + 0].f = m_globalData[st.a + 0].f - m_globalData[st.b + 0].f;
+                m_globalData[st.c + 1].f = m_globalData[st.a + 1].f - m_globalData[st.b + 1].f;
+                m_globalData[st.c + 2].f = m_globalData[st.a + 2].f - m_globalData[st.b + 2].f;
+                break;
+
+            // =======================================================
+            // ---> NEW: QuakeC Vector Multiplication Quirks
+            // =======================================================
+            case qc::OP_MUL_V: // Dot Product!
+                m_globalData[st.c].f = (m_globalData[st.a + 0].f * m_globalData[st.b + 0].f) +
+                                       (m_globalData[st.a + 1].f * m_globalData[st.b + 1].f) +
+                                       (m_globalData[st.a + 2].f * m_globalData[st.b + 2].f);
+                break;
+            case qc::OP_MUL_FV: // Scalar * Vector
+                m_globalData[st.c + 0].f = m_globalData[st.a].f * m_globalData[st.b + 0].f;
+                m_globalData[st.c + 1].f = m_globalData[st.a].f * m_globalData[st.b + 1].f;
+                m_globalData[st.c + 2].f = m_globalData[st.a].f * m_globalData[st.b + 2].f;
+                break;
+            case qc::OP_MUL_VF: // Vector * Scalar
+                m_globalData[st.c + 0].f = m_globalData[st.a + 0].f * m_globalData[st.b].f;
+                m_globalData[st.c + 1].f = m_globalData[st.a + 1].f * m_globalData[st.b].f;
+                m_globalData[st.c + 2].f = m_globalData[st.a + 2].f * m_globalData[st.b].f;
+                break;
+
+            // =======================================================
+            // ---> NEW: Greater/Less Than Comparisons
+            // =======================================================
+            case qc::OP_LE:
+                m_globalData[st.c].f = (m_globalData[st.a].f <= m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_GE:
+                m_globalData[st.c].f = (m_globalData[st.a].f >= m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_LT:
+                m_globalData[st.c].f = (m_globalData[st.a].f < m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_GT:
+                m_globalData[st.c].f = (m_globalData[st.a].f > m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            
+            // ---> NEW: Vector Comparisons
+            case qc::OP_EQ_V:
+                m_globalData[st.c].f = (m_globalData[st.a+0].f == m_globalData[st.b+0].f &&
+                                        m_globalData[st.a+1].f == m_globalData[st.b+1].f &&
+                                        m_globalData[st.a+2].f == m_globalData[st.b+2].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_NE_V:
+                m_globalData[st.c].f = (m_globalData[st.a+0].f != m_globalData[st.b+0].f ||
+                                        m_globalData[st.a+1].f != m_globalData[st.b+1].f ||
+                                        m_globalData[st.a+2].f != m_globalData[st.b+2].f) ? 1.0f : 0.0f;
+                break;
+
+            // =======================================================
+            // ---> NEW: Logical and Bitwise Operations
+            // =======================================================
+            case qc::OP_NOT_F:
+            case qc::OP_NOT_ENT:
+            case qc::OP_NOT_FNC:
+                m_globalData[st.c].f = (!m_globalData[st.a].i) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_NOT_S:
+                m_globalData[st.c].f = (!m_globalData[st.a].string) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_NOT_V:
+                m_globalData[st.c].f = (m_globalData[st.a+0].f == 0.0f && 
+                                        m_globalData[st.a+1].f == 0.0f && 
+                                        m_globalData[st.a+2].f == 0.0f) ? 1.0f : 0.0f;
+                break;
+                
+            case qc::OP_AND:
+                m_globalData[st.c].f = (m_globalData[st.a].f && m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_OR:
+                m_globalData[st.c].f = (m_globalData[st.a].f || m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+
+            // QuakeC bitwise operations cast the floats to ints!
+            case qc::OP_BITAND:
+                m_globalData[st.c].f = static_cast<float>(static_cast<int>(m_globalData[st.a].f) & static_cast<int>(m_globalData[st.b].f));
+                break;
+            case qc::OP_BITOR:
+                m_globalData[st.c].f = static_cast<float>(static_cast<int>(m_globalData[st.a].f) | static_cast<int>(m_globalData[st.b].f));
+                break;
+
+            // =======================================================
             // ---> NEW: Entity Field Loads (e.g., self.health)
             // =======================================================
             case qc::OP_LOAD_F:
