@@ -3,6 +3,15 @@
 
 namespace engine::qc {
 
+// QuakeC generic 32-bit value
+union eval_t {
+    int32_t i;       // Integer
+    float   f;       // Float
+    int32_t string;  // Offset into the string table
+    int32_t edict;   // Entity index
+    int32_t function;// Function index
+};
+
 constexpr int PROG_VERSION = 6;
 
 #pragma pack(push, 1)

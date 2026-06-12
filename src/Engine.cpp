@@ -122,6 +122,23 @@ void Engine::Init() {
     if (progsData) {
         m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
         m_vm->PrintInfo();
+
+        // ---> NEW: Test the Engine-to-VM Memory Bridge
+        int32_t timeOffset = m_vm->FindGlobalOffset("time");
+        int32_t frametimeOffset = m_vm->FindGlobalOffset("frametime");
+        int32_t selfOffset = m_vm->FindGlobalOffset("self");
+
+        std::cout << "--- QuakeC Variable Offsets ---\n";
+        std::cout << "time offset: " << timeOffset << "\n";
+        std::cout << "frametime offset: " << frametimeOffset << "\n";
+        std::cout << "self offset: " << selfOffset << "\n";
+
+        // Let's write to VM memory, and read it back!
+        if (timeOffset != -1) {
+            m_vm->SetGlobalFloat(timeOffset, 123.45f);
+            float readBack = m_vm->GetGlobalFloat(timeOffset);
+            std::cout << "Wrote 123.45 to 'time', read back: " << readBack << "\n";
+        }
     } else {
         std::cerr << "CRITICAL ERROR: Could not find progs.dat!\n";
     }
