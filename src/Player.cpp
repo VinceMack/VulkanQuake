@@ -16,7 +16,7 @@ void Player::ProcessMouse(float xoffset, float yoffset) {
 }
 
 void Player::CheckStuck() {
-    TraceResult trace = m_physics->TraceHull(m_position, m_position, 1);
+    TraceResult trace = m_physics->TraceHull(m_position, m_position, 1, *m_currentEntities);
     if (!trace.startSolid) return; // We are fine
 
     glm::vec3 org = m_position;
@@ -29,7 +29,7 @@ void Player::CheckStuck() {
                 m_position.y = org.y + j;
                 m_position.z = org.z + z;
                 
-                trace = m_physics->TraceHull(m_position, m_position, 1);
+                trace = m_physics->TraceHull(m_position, m_position, 1, *m_currentEntities);
                 if (!trace.startSolid) {
                     return; // Unstuck! Keep the new m_position.
                 }
@@ -71,7 +71,7 @@ int Player::SlideMove(float deltaTime, TraceResult* stepTrace) {
         }
 
         glm::vec3 end = m_position + m_velocity * time_left;
-        TraceResult trace = m_physics->TraceHull(m_position, end, 1);
+        TraceResult trace = m_physics->TraceHull(m_position, end, 1, *m_currentEntities);
 
         if (trace.allSolid) {
             m_velocity = glm::vec3(0.0f);
@@ -192,7 +192,7 @@ void Player::StepSlideMove(float deltaTime) {
     // Step Down
     m_position.z -= sv_stepsize; 
     // Quake mathematically handles the drop with precision tracing, here we snap down safely
-    TraceResult traceDown = m_physics->TraceHull(m_position + glm::vec3(0,0,sv_stepsize), m_position, 1);
+    TraceResult traceDown = m_physics->TraceHull(m_position + glm::vec3(0,0,sv_stepsize), m_position, 1, *m_currentEntities);
     
     if (traceDown.planeNormal.z > 0.7f) {
         m_onGround = true;
@@ -204,13 +204,13 @@ void Player::StepSlideMove(float deltaTime) {
     }
 }
 
-void Player::TickPhysics(const UserCmd& cmd) {
-    // Unstick from BSP floating point errors!
+void Player::TickPhysics(const UserCmd& cmd, const std::vector<RenderEntity>& entities) {
+    m_currentEntities = &entities; // <--- Store temporarily for the duration of this tick
+
     CheckStuck();
     
-    // 1. Full Gravity Application (Standard Euler)
     if (!m_onGround) {
-        m_velocity.z -= sv_gravity * cmd.msec;
+        m_velocity.z -= (sv_gravity * cmd.msec) * 0.5f; // Quake Euler Gravity
     }
 
     // 2. Velocity Cap
@@ -220,7 +220,7 @@ void Player::TickPhysics(const UserCmd& cmd) {
     }
 
     // 3. Ground check 
-    TraceResult groundTrace = m_physics->TraceHull(m_position, m_position + glm::vec3(0.0f, 0.0f, -0.25f), 1);
+    TraceResult groundTrace = m_physics->TraceHull(m_position, m_position + glm::vec3(0.0f, 0.0f, -0.25f), 1, *m_currentEntities);
     m_onGround = (groundTrace.fraction < 1.0f && groundTrace.planeNormal.z > 0.7f);
 
     if (m_onGround && cmd.upmove > 0.0f) {
@@ -238,6 +238,8 @@ void Player::TickPhysics(const UserCmd& cmd) {
 
     // 8. Update Camera (Only update position so we don't overwrite mouse pitch!)
     m_camera->SetPosition(m_position + glm::vec3(0.0f, 0.0f, 22.0f));
+    
+    m_currentEntities = nullptr; // <--- Clear it to be safe
 }
 
 void Player::PM_Friction(float deltaTime) {
@@ -254,7 +256,7 @@ void Player::PM_Friction(float deltaTime) {
     // 2. Edge Friction (Trace 16 units ahead, 34 down)
     glm::vec3 start = m_position + (glm::vec3(m_velocity.x, m_velocity.y, 0.0f) / speed) * 16.0f;
     glm::vec3 stop = start - glm::vec3(0.0f, 0.0f, 34.0f);
-    TraceResult edgeTrace = m_physics->TraceHull(start, stop, 1);
+    TraceResult edgeTrace = m_physics->TraceHull(start, stop, 1, *m_currentEntities);
     if (edgeTrace.fraction == 1.0f) {
         friction *= sv_edgefriction;
     }

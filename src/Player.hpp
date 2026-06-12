@@ -1,7 +1,9 @@
 #pragma once
 #include "Physics.hpp"
 #include "Camera.hpp"
+#include "RenderEntity.hpp"
 #include <glm/glm.hpp>
+#include <vector>
 
 namespace engine {
 
@@ -22,7 +24,7 @@ public:
     void Spawn(glm::vec3 origin, float yaw);
 
     void ProcessMouse(float xoffset, float yoffset);
-    void TickPhysics(const UserCmd& cmd);
+    void TickPhysics(const UserCmd& cmd, const std::vector<RenderEntity>& entities);
 
     glm::vec3 GetPosition() const { return m_position; }
 
@@ -57,6 +59,8 @@ private:
     glm::vec3 m_velocity;
 
     bool m_onGround = false;
+
+    const std::vector<RenderEntity>* m_currentEntities = nullptr;
 };
 
 } // namespace engine

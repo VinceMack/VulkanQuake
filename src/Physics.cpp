@@ -4,25 +4,63 @@ namespace engine {
 
 Physics::Physics(const Map* map) : m_map(map) {}
 
-TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id) {
+TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, const std::vector<RenderEntity>& entities) {
     TraceResult trace;
-    // Quake initializes traces assuming they are stuck in a solid
-    // The recursive check clears this if it finds empty space
     trace.allSolid = true;
     trace.startSolid = false;
     trace.fraction = 1.0f;
-    trace.endPos = end;
     trace.contents = bsp::CONTENTS_EMPTY;
 
+    // 1. Trace against Model 0 (The static world)
     const auto& worldModel = m_map->GetBspModel(0);
-    int rootNode = worldModel.headnode[hull_id];
-    trace.rootNode = rootNode; // Save the root node for the backup check
+    trace.rootNode = worldModel.headnode[hull_id];
 
-    RecursiveHullCheck(rootNode, 0.0f, 1.0f, start, end, trace);
+    RecursiveHullCheck(trace.rootNode, 0.0f, 1.0f, start, end, trace);
 
+    // 2. Trace against Dynamic Brush Entities (Doors, platforms)
+    for (const auto& ent : entities) {
+        // We only collide with BSP models, not Alias models (like monsters/armor) yet
+        if (ent.type != EntityModelType::BspBrush || ent.modelId == 0) continue;
+
+        const auto& bspModel = m_map->GetBspModel(ent.modelId);
+        int rootNode = bspModel.headnode[hull_id];
+        
+        // Sometimes the map compiler decides a submodel doesn't need a specific hull size.
+        if (rootNode == bsp::CONTENTS_EMPTY) continue;
+
+        // Shift the trace into the entity's local coordinate space
+        glm::vec3 localStart = start - ent.origin;
+        glm::vec3 localEnd = end - ent.origin;
+
+        TraceResult localTrace;
+        localTrace.allSolid = true;
+        localTrace.startSolid = false;
+        localTrace.fraction = 1.0f; 
+        localTrace.contents = bsp::CONTENTS_EMPTY;
+        localTrace.rootNode = rootNode;
+
+        RecursiveHullCheck(rootNode, 0.0f, 1.0f, localStart, localEnd, localTrace);
+
+        // If we hit this door, and it is CLOSER than the wall we hit earlier, keep it!
+        if (localTrace.fraction < trace.fraction || (localTrace.startSolid && !trace.startSolid)) {
+            trace.fraction = localTrace.fraction;
+            trace.startSolid = localTrace.startSolid;
+            trace.allSolid = localTrace.allSolid;
+            trace.planeNormal = localTrace.planeNormal;
+            // Shift the plane distance back into world space
+            trace.planeDist = localTrace.planeDist + glm::dot(localTrace.planeNormal, ent.origin);
+            trace.contents = localTrace.contents;
+            trace.rootNode = rootNode; 
+        }
+    }
+
+    // 3. Finalize the world-space end position
     if (trace.fraction == 1.0f) {
         trace.endPos = end;
+    } else {
+        trace.endPos = start + (end - start) * trace.fraction;
     }
+
     return trace;
 }
 

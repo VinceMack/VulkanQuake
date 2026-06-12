@@ -1,6 +1,8 @@
 #pragma once
 #include "Map.hpp"
+#include "RenderEntity.hpp"
 #include <glm/glm.hpp>
+#include <vector>
 
 namespace engine {
 
@@ -18,7 +20,8 @@ struct TraceResult {
 class Physics {
 public:
     Physics(const Map* map);
-    TraceResult TraceHull(glm::vec3 start, glm::vec3 end, int hull_id);
+
+    TraceResult TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, const std::vector<RenderEntity>& entities);
 
 private:
     // Required to check if a specific point is inside a wall

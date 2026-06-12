@@ -204,7 +204,7 @@ void Engine::MainLoop() {
         if (keys[SDL_SCANCODE_SPACE]) cmd.upmove = 400.0f;
 
         // Player Physics Tick using UserCmd
-        m_player->TickPhysics(cmd);
+        m_player->TickPhysics(cmd, m_renderEntities);
 
         // ========================================================================
         // Entity Simulation (The Game Tick)
