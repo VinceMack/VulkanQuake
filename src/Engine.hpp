@@ -24,11 +24,15 @@ public:
 
     void Run();
 
+    // ---> NEW: Runtime map loader
+    bool LoadMap(const std::string& mapName);
+
 private:
     void Init();
     void MainLoop();
 
-    uint32_t LoadAliasModel(const std::string& path, engine::vfs::VirtualFileSystem& vfs, std::span<const std::byte> palette);
+    // Change LoadAliasModel signature to remove the vfs parameter, since VFS is now a class member
+    uint32_t LoadAliasModel(const std::string& path, std::span<const std::byte> palette);
 
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Renderer> m_renderer;
@@ -41,6 +45,9 @@ private:
     std::unordered_map<std::string, uint32_t> m_modelCache;
     RenderEntity m_viewModel;
     std::unique_ptr<Console> m_console;
+
+    // ---> NEW: Promote VFS to member variable
+    std::unique_ptr<engine::vfs::VirtualFileSystem> m_vfs;
     
     bool m_isRunning = false;
 };

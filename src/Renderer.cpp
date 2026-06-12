@@ -31,6 +31,7 @@ Renderer::Renderer(Window* window, const std::string& exeDir)
     InitSwapchain();
     InitPipeline();
     InitSyncStructures();
+    InitUIBuffers(); // <--- NEW!
 }
 
 Renderer::~Renderer() {
@@ -258,10 +259,7 @@ void Renderer::UploadMap(const Map& map) {
                indexBufferSize);
     }
     
-    size_t uiBufferSize = 10000 * sizeof(engine::UIVertex); // Enough room for ~1600 text characters
-    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
-        m_dynamicUIBuffers.push_back(engine::CreateDynamicBuffer(vkCtx, uiBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
-    }
+
 
     m_lightmapAtlasTexture = engine::CreateAndUploadImage(vkCtx, map.GetLightmapAtlas());
 
@@ -468,6 +466,9 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         if (rent.type != EntityModelType::BspBrush) continue;
         if (rent.modelId == 0) continue; // Model 0 was already drawn by the PVS pass!
 
+        // ---> NEW: Don't draw invisible entities (like triggers)
+        if (!rent.isVisible) continue;
+
         const SubModel& subModel = map.GetSubModel(rent.modelId);
         
         // Calculate the specific matrix for THIS door
@@ -613,6 +614,38 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     vkQueuePresentKHR(m_graphicsQueue, &presentInfo);
 
     m_currentFrame = (m_currentFrame + 1) % m_maxFramesInFlight;
+}
+
+void Renderer::InitUIBuffers() {
+    engine::VulkanContext vkCtx = { m_vkbDevice.device, m_allocator, m_graphicsQueue, m_commandPool };
+    size_t uiBufferSize = 10000 * sizeof(engine::UIVertex); 
+    
+    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
+        m_dynamicUIBuffers.push_back(engine::CreateDynamicBuffer(vkCtx, uiBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT));
+    }
+}
+
+void Renderer::UnloadMap() {
+    if (!m_vkbDevice.device) return;
+    
+    // Stop the GPU so we don't delete memory while it's drawing!
+    vkDeviceWaitIdle(m_vkbDevice.device);
+
+    m_vertexBuffer.Destroy();
+    
+    for (auto& tex : m_gpuTextures) tex.Destroy();
+    m_gpuTextures.clear();
+    
+    m_lightmapAtlasTexture.Destroy();
+
+    for (auto& buf : m_dynamicIndexBuffers) buf.Destroy();
+    m_dynamicIndexBuffers.clear();
+
+    if (m_descriptorPool) {
+        vkDestroyDescriptorPool(m_vkbDevice.device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+    }
+    m_descriptorSets.clear();
 }
 
 } // namespace engine

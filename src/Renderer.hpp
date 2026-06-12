@@ -38,6 +38,12 @@ public:
 
     void UploadFont(const TextureData& fontData);
 
+    // Separated so UI buffers survive map loads
+    void InitUIBuffers(); 
+    
+    // Safely tears down map-specific Vulkan resources
+    void UnloadMap(); 
+
 private:
     void InitVulkan();
     void InitSwapchain();

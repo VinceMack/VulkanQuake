@@ -68,11 +68,22 @@ void Map::ParseTextures(std::span<const std::byte> data, std::span<const std::by
     const uint8_t* pal = reinterpret_cast<const uint8_t*>(palette.data());
 
     for (int i = 0; i < numTextures; ++i) {
-        if (offsets[i] == -1) continue; // Some animated textures are missing/blank
+        TextureData& td = m_textures[i];
+
+        if (offsets[i] == -1) {
+            // FIX: Supply a 1x1 dummy pixel so Vulkan doesn't crash on a 0-byte allocation!
+            td.name = "missing_frame";
+            td.width = 1;
+            td.height = 1;
+            td.pixelsRGBA.resize(4);
+            td.pixelsRGBA[0] = std::byte{255}; // R (Hot Pink so it's obvious if it draws)
+            td.pixelsRGBA[1] = std::byte{0};   // G
+            td.pixelsRGBA[2] = std::byte{255}; // B
+            td.pixelsRGBA[3] = std::byte{255}; // A
+            continue;
+        }
 
         const bsp::BspMiptex* miptex = reinterpret_cast<const bsp::BspMiptex*>(texLumpStart + offsets[i]);
-        
-        TextureData& td = m_textures[i];
         td.name = miptex->name;
         td.width = miptex->width;
         td.height = miptex->height;

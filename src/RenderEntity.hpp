@@ -19,6 +19,10 @@ struct RenderEntity {
     uint32_t nextFrame;
     float interp;
 
+    // ---> NEW FLAGS
+    bool isSolid = true;   
+    bool isVisible = true; 
+
     // Helper to generate the exact Vulkan transformation matrix
     glm::mat4 GetTransformMatrix() const;
 };

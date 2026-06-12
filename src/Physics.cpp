@@ -22,6 +22,9 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
         // We only collide with BSP models, not Alias models (like monsters/armor) yet
         if (ent.type != EntityModelType::BspBrush || ent.modelId == 0) continue;
 
+        // ---> NEW: Ignore triggers and non-solid entities!
+        if (!ent.isSolid) continue; 
+
         const auto& bspModel = m_map->GetBspModel(ent.modelId);
         int rootNode = bspModel.headnode[hull_id];
         

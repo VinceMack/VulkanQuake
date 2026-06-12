@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <cstdlib>
+#include <algorithm>
+#include <cctype>
 #include <SDL3/SDL.h>
 
 // Helper functions for locating data
@@ -50,7 +52,7 @@ Engine::~Engine() {
     // unique_ptrs automatically tear down Renderer, then Window.
 }
 
-uint32_t Engine::LoadAliasModel(const std::string& path, engine::vfs::VirtualFileSystem& vfs, std::span<const std::byte> palette) {
+uint32_t Engine::LoadAliasModel(const std::string& path, std::span<const std::byte> palette) {
     // Check if we already loaded it
     auto it = m_modelCache.find(path);
     if (it != m_modelCache.end()) {
@@ -58,7 +60,7 @@ uint32_t Engine::LoadAliasModel(const std::string& path, engine::vfs::VirtualFil
     }
 
     // Try to read it from the PAK file
-    auto data = vfs.ReadFile(path);
+    auto data = m_vfs->ReadFile(path);
     if (!data) {
         std::cerr << "WARNING: Could not read " << path << " from VFS.\n";
         m_modelCache[path] = 0; // Cache the failure as 0 so we don't spam the VFS
@@ -80,253 +82,256 @@ uint32_t Engine::LoadAliasModel(const std::string& path, engine::vfs::VirtualFil
 
 void Engine::Init() {
     std::cout << "Initializing Engine...\n";
-    m_window = std::make_unique<Window>("Vulkan Quake Engine", 1280, 720);
-    m_camera = std::make_unique<Camera>(glm::vec3(400.0f, 400.0f, 100.0f));
+    m_window = std::make_unique<Window>("VulkanQuake", 1280, 720);
+    m_camera = std::make_unique<Camera>(glm::vec3(0.0f));
 
     std::filesystem::path exeDir;
     const char* basePath = SDL_GetBasePath();
-    if (basePath) {
-        exeDir = std::filesystem::path(basePath);
-    } else {
-        exeDir = std::filesystem::current_path();
-    }
+    if (basePath) exeDir = std::filesystem::path(basePath);
+    else exeDir = std::filesystem::current_path();
 
-    // Initialize Renderer (Vulkan context)
     m_renderer = std::make_unique<Renderer>(m_window.get(), exeDir.string());
 
-    // Initialize VFS
+    // 1. Initialize VFS as a member variable
     std::filesystem::path dataPath = find_data_directory(std::filesystem::current_path(), exeDir);
-    if (dataPath.empty()) {
-        std::cerr << "WARNING: data directory with pak0.pak not found by search.\n";
-        dataPath = std::filesystem::current_path() / "data"; 
-    }
+    if (dataPath.empty()) dataPath = std::filesystem::current_path() / "data"; 
 
-    engine::vfs::VirtualFileSystem vfs(dataPath);
-    if (!vfs.MountPak("pak0.pak")) {
+    m_vfs = std::make_unique<engine::vfs::VirtualFileSystem>(dataPath);
+    if (!m_vfs->MountPak("pak0.pak")) {
         throw std::runtime_error("ERROR: Could not find or read pak0.pak!");
     }
 
-    auto paletteData = vfs.ReadFile("gfx/palette.lmp");
-    auto mapData = vfs.ReadFile("maps/e1m1.bsp");
+    // 2. Initialize Console
+    m_console = std::make_unique<Console>();
+    SDL_StartTextInput(m_window->GetHandle());
 
+    // 3. Register Console Commands
+    m_console->RegisterCommand("noclip", [this](const std::vector<std::string>& args) {
+        if (m_player) {
+            m_player->ToggleNoclip();
+            m_console->Print(m_player->IsNoclip() ? "noclip ON" : "noclip OFF");
+        }
+    });
 
+    m_console->RegisterCommand("quit", [this](const std::vector<std::string>& args) {
+        m_isRunning = false; 
+    });
+    
+    // ---> NEW: Map Command!
+    m_console->RegisterCommand("map", [this](const std::vector<std::string>& args) {
+        if (args.empty()) {
+            m_console->Print("Usage: map <filename>");
+            return;
+        }
+        LoadMap(args[0]); // Execute our new runtime loader!
+    });
 
-    if (mapData && paletteData) {
-        m_map = std::make_unique<Map>(std::move(*mapData), *paletteData);
-        // Hand the map over to the Renderer so it can upload everything to VRAM
-        m_renderer->UploadMap(*m_map);
+    m_console->RegisterCommand("clear", [this](const std::vector<std::string>& args) {
+        m_console->Clear();
+    });
 
-        // ---> NEW: Extract Font Atlas from gfx.wad inside pak0.pak
-        std::vector<uint8_t> concharsBytes;
-        auto wadData = vfs.ReadFile("gfx.wad");
-        if (wadData) {
+    // 4. Load UI Font and View Model
+    auto paletteData = m_vfs->ReadFile("gfx/palette.lmp");
+    
+    // Extract Font Atlas from gfx.wad inside pak0.pak
+    std::vector<uint8_t> concharsBytes;
+    auto wadData = m_vfs->ReadFile("gfx.wad");
+    if (wadData) {
 #pragma pack(push, 1)
-            struct WadHeader {
-                char magic[4];
-                int32_t numentries;
-                int32_t diroffset;
-            };
-            struct WadEntry {
-                int32_t offset;
-                int32_t dsize;
-                int32_t size;
-                char type;
-                char cmprs;
-                int16_t dummy;
-                char name[16];
-            };
+        struct WadHeader {
+            char magic[4];
+            int32_t numentries;
+            int32_t diroffset;
+        };
+        struct WadEntry {
+            int32_t offset;
+            int32_t dsize;
+            int32_t size;
+            char type;
+            char cmprs;
+            int16_t dummy;
+            char name[16];
+        };
 #pragma pack(pop)
 
-            if (wadData->size() >= sizeof(WadHeader)) {
-                const WadHeader* header = reinterpret_cast<const WadHeader*>(wadData->data());
-                if (std::string(header->magic, 4) == "WAD2") {
-                    int32_t dirOffset = header->diroffset;
-                    int32_t numEntries = header->numentries;
-                    
-                    for (int32_t i = 0; i < numEntries; i++) {
-                        size_t entryPos = dirOffset + i * sizeof(WadEntry);
-                        if (entryPos + sizeof(WadEntry) <= wadData->size()) {
-                            const WadEntry* entry = reinterpret_cast<const WadEntry*>(wadData->data() + entryPos);
-                            std::string entryName(entry->name);
-                            // Convert to lowercase for comparison
-                            std::transform(entryName.begin(), entryName.end(), entryName.begin(),
-                                           [](unsigned char c) { return std::tolower(c); });
-                            if (entryName == "conchars") {
-                                if (entry->offset + entry->size <= wadData->size()) {
-                                    concharsBytes.resize(entry->size);
-                                    std::memcpy(concharsBytes.data(), wadData->data() + entry->offset, entry->size);
-                                }
-                                break;
+        if (wadData->size() >= sizeof(WadHeader)) {
+            const WadHeader* header = reinterpret_cast<const WadHeader*>(wadData->data());
+            if (std::string(header->magic, 4) == "WAD2") {
+                int32_t dirOffset = header->diroffset;
+                int32_t numEntries = header->numentries;
+                
+                for (int32_t i = 0; i < numEntries; i++) {
+                    size_t entryPos = dirOffset + i * sizeof(WadEntry);
+                    if (entryPos + sizeof(WadEntry) <= wadData->size()) {
+                        const WadEntry* entry = reinterpret_cast<const WadEntry*>(wadData->data() + entryPos);
+                        std::string entryName(entry->name);
+                        // Convert to lowercase for comparison
+                        std::transform(entryName.begin(), entryName.end(), entryName.begin(),
+                                       [](unsigned char c) { return std::tolower(c); });
+                        if (entryName == "conchars") {
+                            if (entry->offset + entry->size <= wadData->size()) {
+                                concharsBytes.resize(entry->size);
+                                std::memcpy(concharsBytes.data(), wadData->data() + entry->offset, entry->size);
                             }
+                            break;
                         }
                     }
                 }
             }
-        } else {
-            std::cerr << "ERROR: Failed to read gfx.wad from VFS! Error code: " 
-                      << static_cast<int>(wadData.error()) << "\n";
         }
-
-        if (!concharsBytes.empty() && paletteData) {
-            engine::TextureData fontData;
-            fontData.name = "conchars";
-            fontData.width = 128;
-            fontData.height = 128;
-            fontData.pixelsRGBA.resize(128 * 128 * 4);
-            
-            const uint8_t* pal = reinterpret_cast<const uint8_t*>(paletteData->data());
-            
-            for (size_t i = 0; i < 16384; ++i) { // 128x128 = 16384 bytes
-                uint8_t colorIndex = concharsBytes[i];
-                
-                // Font uses index 0 for transparent backgrounds!
-                bool isTransparent = (colorIndex == 0); 
-                
-                fontData.pixelsRGBA[i * 4 + 0] = static_cast<std::byte>(pal[colorIndex * 3 + 0]);
-                fontData.pixelsRGBA[i * 4 + 1] = static_cast<std::byte>(pal[colorIndex * 3 + 1]);
-                fontData.pixelsRGBA[i * 4 + 2] = static_cast<std::byte>(pal[colorIndex * 3 + 2]);
-                fontData.pixelsRGBA[i * 4 + 3] = isTransparent ? std::byte{0} : std::byte{255};
-            }
-            m_renderer->UploadFont(fontData);
-            std::cout << "Successfully uploaded Quake Font (extracted from gfx.wad)\n";
-        } else if (concharsBytes.empty()) {
-            std::cerr << "ERROR: CONCHARS lump was not found inside gfx.wad!\n";
-        }
-
-        // Initialize Physics and Player
-        m_physics = std::make_unique<Physics>(m_map.get());
-        m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
-    } else {
-        throw std::runtime_error("Failed to load map or palette data.");
     }
-        // Spawn the Camera using Entity data
-        glm::vec3 spawnOrigin(0.0f, 0.0f, 0.0f);
-        float spawnAngle = 0.0f;
-        bool foundSpawn = false;
 
-        // ---> NEW: Dictionary of Quake 1 Classnames to MDL files
-        std::unordered_map<std::string, std::string> classnameToMdl = {
-            {"monster_army", "progs/soldier.mdl"},
-            {"monster_dog", "progs/dog.mdl"},
-            {"monster_ogre", "progs/ogre.mdl"},
-            {"monster_demon1", "progs/demon.mdl"},
-            {"monster_shambler", "progs/shambler.mdl"},
-            {"monster_knight", "progs/knight.mdl"},
-            {"monster_zombie", "progs/zombie.mdl"},
-            {"item_armor1", "progs/armor.mdl"},
-            {"item_armor2", "progs/armor.mdl"},
-            {"item_armorInv", "progs/armor.mdl"},
-            {"weapon_nailgun", "progs/g_nail.mdl"},
-            {"weapon_supershotgun", "progs/g_shot.mdl"},
-            {"weapon_supernailgun", "progs/g_nail2.mdl"},
-            {"weapon_rocketlauncher", "progs/g_rock.mdl"},
-            {"weapon_grenadelauncher", "progs/g_rock.mdl"},
-            {"weapon_lightning", "progs/g_light.mdl"},
-            {"item_shells", "progs/m_shell.mdl"},
-            {"item_spikes", "progs/m_nail.mdl"},
-            {"item_rockets", "progs/m_rock.mdl"},
-            {"item_cells", "progs/m_light.mdl"},
-            {"item_health", "progs/m_health.mdl"} // Megahealth
-        };
-
-        for (const auto& ent : m_map->GetEntities()) {
-            std::string cls = ent.GetClassname();
-
-            // 1. Spawn Player
-            if (cls == "info_player_start") {
-                spawnOrigin = ent.GetVector("origin");
-                spawnAngle = ent.GetFloat("angle");
-                foundSpawn = true;
-            }
+    if (!concharsBytes.empty() && paletteData) {
+        engine::TextureData fontData;
+        fontData.name = "conchars";
+        fontData.width = 128;
+        fontData.height = 128;
+        fontData.pixelsRGBA.resize(128 * 128 * 4);
+        
+        const uint8_t* pal = reinterpret_cast<const uint8_t*>(paletteData->data());
+        
+        for (size_t i = 0; i < 16384; ++i) { // 128x128 = 16384 bytes
+            uint8_t colorIndex = concharsBytes[i];
             
-            // 2. Brush Entities (Doors/Elevators)
-            std::string modelStr = ent.GetString("model");
-            if (!modelStr.empty() && modelStr[0] == '*') {
-                RenderEntity rent;
-                rent.type = EntityModelType::BspBrush;
-                rent.modelId = std::stoi(modelStr.substr(1));
-                rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
-                rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
-                rent.frame = 0;
-                m_renderEntities.push_back(rent);
-            }
-
-            // 3. Dynamic Alias Models (Monsters & Items)
-            auto it = classnameToMdl.find(cls);
-            if (it != classnameToMdl.end()) {
-                uint32_t mdlId = LoadAliasModel(it->second, vfs, *paletteData);
-                
-                if (mdlId != 0) {
-                    RenderEntity rent;
-                    rent.type = EntityModelType::Alias;
-                    rent.modelId = mdlId;
-                    
-                    // Most Quake models are anchored at the floor
-                    rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
-                    
-                    // Point entities use 'angle' for visual Yaw rotation
-                    rent.angles = glm::vec3(0.0f, ent.GetFloat("angle", 0.0f), 0.0f);
-                    
-                    rent.frame = 0;
-                    rent.nextFrame = 1;
-                    
-                    // Give them a random starting interpolation so they don't animate in perfect unison
-                    rent.interp = static_cast<float>(rand() % 100) / 100.0f;
-
-                    m_renderEntities.push_back(rent);
-                }
-            }
+            // Font uses index 0 for transparent backgrounds!
+            bool isTransparent = (colorIndex == 0); 
+            
+            fontData.pixelsRGBA[i * 4 + 0] = static_cast<std::byte>(pal[colorIndex * 3 + 0]);
+            fontData.pixelsRGBA[i * 4 + 1] = static_cast<std::byte>(pal[colorIndex * 3 + 1]);
+            fontData.pixelsRGBA[i * 4 + 2] = static_cast<std::byte>(pal[colorIndex * 3 + 2]);
+            fontData.pixelsRGBA[i * 4 + 3] = isTransparent ? std::byte{0} : std::byte{255};
         }
+        m_renderer->UploadFont(fontData);
+        std::cout << "Successfully uploaded Quake Font (extracted from gfx.wad)\n";
+    }
 
-        if (foundSpawn) {
-            m_player->Spawn(spawnOrigin, spawnAngle);
-            std::cout << "Player spawned at: " << spawnOrigin.x << ", " 
-                      << spawnOrigin.y << ", " << spawnOrigin.z << "\n";
-        } else {
-            std::cerr << "WARNING: No info_player_start found. Spawning at 0,0,0.\n";
-        }
-
-        // Load the shotgun view model
-        uint32_t vShotId = LoadAliasModel("progs/v_shot.mdl", vfs, *paletteData);
+    if (paletteData) {
+        uint32_t vShotId = LoadAliasModel("progs/v_shot.mdl", *paletteData);
         m_viewModel.type = EntityModelType::Alias;
         m_viewModel.modelId = vShotId;
         m_viewModel.origin = glm::vec3(0.0f);
         m_viewModel.angles = glm::vec3(0.0f);
         m_viewModel.frame = 0;
-        m_viewModel.nextFrame = 0; // Don't animate the gun just yet
+        m_viewModel.nextFrame = 0;
         m_viewModel.interp = 0.0f;
+    }
 
-    m_console = std::make_unique<Console>();
-    SDL_StartTextInput(m_window->GetHandle()); // Tell OS to capture text!
-
-    // ========================================================================
-    // ---> NEW: Register Console Commands
-    // ========================================================================
-    
-    // Noclip Command
-    m_console->RegisterCommand("noclip", [this](const std::vector<std::string>& args) {
-        if (m_player) {
-            m_player->ToggleNoclip();
-            if (m_player->IsNoclip()) {
-                m_console->Print("noclip ON");
-            } else {
-                m_console->Print("noclip OFF");
-            }
-        }
-    });
-
-    // Quit Command
-    m_console->RegisterCommand("quit", [this](const std::vector<std::string>& args) {
-        m_console->Print("Quitting...");
-        m_isRunning = false; // This will safely break the MainLoop
-    });
-
-    // Clear Command (Bonus!)
-    m_console->RegisterCommand("clear", [this](const std::vector<std::string>& args) {
-        m_console->Clear();
-    });
+    // 5. Load the initial map
+    if (!LoadMap("e1m1")) {
+        throw std::runtime_error("Failed to load initial map e1m1");
+    }
 
     m_isRunning = true;
+}
+
+bool Engine::LoadMap(const std::string& mapName) {
+    std::cout << "Loading " << mapName << "\n";
+    std::string bspPath = "maps/" + mapName + ".bsp";
+    auto mapData = m_vfs->ReadFile(bspPath);
+    
+    if (!mapData) {
+        m_console->Print("ERROR: Could not find map " + mapName);
+        return false;
+    }
+
+    auto paletteData = m_vfs->ReadFile("gfx/palette.lmp");
+    if (!paletteData) return false;
+
+    // 1. Unload old map from the GPU
+    m_renderer->UnloadMap();
+
+    // 2. Parse and Upload new map
+    m_map = std::make_unique<Map>(std::move(*mapData), *paletteData);
+    m_renderer->UploadMap(*m_map);
+
+    // 3. Clear dynamic entities
+    m_renderEntities.clear();
+
+    // 4. Rebuild Physics and Player (Critical! Prevents dangling m_map pointers)
+    m_physics = std::make_unique<Physics>(m_map.get());
+    m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
+
+    // 5. Parse Entities
+    glm::vec3 spawnOrigin(0.0f);
+    float spawnAngle = 0.0f;
+    bool foundSpawn = false;
+
+    std::unordered_map<std::string, std::string> classnameToMdl = {
+        {"monster_army", "progs/soldier.mdl"}, {"monster_dog", "progs/dog.mdl"},
+        {"monster_ogre", "progs/ogre.mdl"}, {"monster_demon1", "progs/demon.mdl"},
+        {"monster_shambler", "progs/shambler.mdl"}, {"monster_knight", "progs/knight.mdl"},
+        {"monster_zombie", "progs/zombie.mdl"}, {"item_armor1", "progs/armor.mdl"},
+        {"item_armor2", "progs/armor.mdl"}, {"item_armorInv", "progs/armor.mdl"},
+        {"weapon_nailgun", "progs/g_nail.mdl"}, {"weapon_supershotgun", "progs/g_shot.mdl"},
+        {"weapon_supernailgun", "progs/g_nail2.mdl"}, {"weapon_rocketlauncher", "progs/g_rock.mdl"},
+        {"weapon_grenadelauncher", "progs/g_rock.mdl"}, {"weapon_lightning", "progs/g_light.mdl"},
+        {"item_shells", "progs/m_shell.mdl"}, {"item_spikes", "progs/m_nail.mdl"},
+        {"item_rockets", "progs/m_rock.mdl"}, {"item_cells", "progs/m_light.mdl"},
+        {"item_health", "progs/m_health.mdl"}
+    };
+
+    for (const auto& ent : m_map->GetEntities()) {
+        std::string cls = ent.GetClassname();
+
+        if (cls == "info_player_start") {
+            spawnOrigin = ent.GetVector("origin");
+            spawnAngle = ent.GetFloat("angle");
+            foundSpawn = true;
+        }
+        
+        std::string modelStr = ent.GetString("model");
+        if (!modelStr.empty() && modelStr[0] == '*') {
+            RenderEntity rent;
+            rent.type = EntityModelType::BspBrush;
+            rent.modelId = std::stoi(modelStr.substr(1));
+            rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
+            rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
+            rent.frame = 0;
+            
+            // ---> NEW: Classify Triggers and Illusionary walls
+            std::string cls = ent.GetClassname();
+            rent.isSolid = true;
+            rent.isVisible = true;
+
+            // If the classname contains "trigger", it's an invisible hit-box
+            if (cls.find("trigger_") != std::string::npos) {
+                rent.isSolid = false;
+                rent.isVisible = false;
+            } 
+            // func_illusionary is a visible wall that you can walk right through
+            else if (cls == "func_illusionary") {
+                rent.isSolid = false;
+            }
+
+            m_renderEntities.push_back(rent);
+        }
+
+        auto it = classnameToMdl.find(cls);
+        if (it != classnameToMdl.end()) {
+            uint32_t mdlId = LoadAliasModel(it->second, *paletteData);
+            if (mdlId != 0) {
+                RenderEntity rent;
+                rent.type = EntityModelType::Alias;
+                rent.modelId = mdlId;
+                rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
+                rent.angles = glm::vec3(0.0f, ent.GetFloat("angle", 0.0f), 0.0f);
+                rent.frame = 0;
+                rent.nextFrame = 1;
+                rent.interp = static_cast<float>(rand() % 100) / 100.0f;
+                m_renderEntities.push_back(rent);
+            }
+        }
+    }
+
+    // 6. Spawn the player
+    if (foundSpawn) {
+        m_player->Spawn(spawnOrigin, spawnAngle);
+    } else {
+        m_player->Spawn(glm::vec3(0.0f), 0.0f);
+        m_console->Print("WARNING: No spawn point found.");
+    }
+
+    return true;
 }
 
 void Engine::Run() {
