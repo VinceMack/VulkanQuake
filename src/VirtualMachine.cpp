@@ -157,6 +157,115 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                 m_globalData[st.c].f = m_globalData[st.a].f + m_globalData[st.b].f;
                 break;
 
+            // =======================================================
+            // ---> NEW: Entity Field Loads (e.g., self.health)
+            // =======================================================
+            case qc::OP_LOAD_F:
+            case qc::OP_LOAD_S:
+            case qc::OP_LOAD_ENT:
+            case qc::OP_LOAD_FLD:
+            case qc::OP_LOAD_FNC: {
+                int32_t edictIdx = m_globalData[st.a].edict;
+                int32_t fieldOffset = m_globalData[st.b].i;
+                m_globalData[st.c].i = m_edicts[edictIdx].v[fieldOffset].i;
+                break;
+            }
+            case qc::OP_LOAD_V: {
+                int32_t edictIdx = m_globalData[st.a].edict;
+                int32_t fieldOffset = m_globalData[st.b].i;
+                m_globalData[st.c + 0].i = m_edicts[edictIdx].v[fieldOffset + 0].i;
+                m_globalData[st.c + 1].i = m_edicts[edictIdx].v[fieldOffset + 1].i;
+                m_globalData[st.c + 2].i = m_edicts[edictIdx].v[fieldOffset + 2].i;
+                break;
+            }
+
+            // =======================================================
+            // ---> NEW: Pointers and Entity Field Stores
+            // =======================================================
+            case qc::OP_ADDRESS: {
+                int32_t edictIdx = m_globalData[st.a].edict;
+                int32_t fieldOffset = m_globalData[st.b].i;
+                // Encode the pointer securely: Top 16 bits = Entity, Bottom 16 bits = Field
+                m_globalData[st.c].i = (edictIdx << 16) | (fieldOffset & 0xFFFF);
+                break;
+            }
+            case qc::OP_STOREP_F:
+            case qc::OP_STOREP_S:
+            case qc::OP_STOREP_ENT:
+            case qc::OP_STOREP_FLD:
+            case qc::OP_STOREP_FNC: {
+                int32_t ptr = m_globalData[st.b].i;
+                int32_t edictIdx = (ptr >> 16) & 0xFFFF;
+                int32_t fieldOffset = ptr & 0xFFFF;
+                m_edicts[edictIdx].v[fieldOffset].i = m_globalData[st.a].i;
+                break;
+            }
+            case qc::OP_STOREP_V: {
+                int32_t ptr = m_globalData[st.b].i;
+                int32_t edictIdx = (ptr >> 16) & 0xFFFF;
+                int32_t fieldOffset = ptr & 0xFFFF;
+                m_edicts[edictIdx].v[fieldOffset + 0].i = m_globalData[st.a + 0].i;
+                m_edicts[edictIdx].v[fieldOffset + 1].i = m_globalData[st.a + 1].i;
+                m_edicts[edictIdx].v[fieldOffset + 2].i = m_globalData[st.a + 2].i;
+                break;
+            }
+
+            // =======================================================
+            // ---> NEW: Control Flow (If / Else / Goto)
+            // =======================================================
+            case qc::OP_IF:
+                // In C and QuakeC, 0.0f evaluates to a 0 integer perfectly
+                if (m_globalData[st.a].i != 0) pc += st.b; 
+                break;
+            case qc::OP_IFNOT:
+                if (m_globalData[st.a].i == 0) pc += st.b;
+                break;
+            case qc::OP_GOTO:
+                pc += st.a;
+                break;
+
+            // =======================================================
+            // ---> NEW: Equality and Comparisons
+            // =======================================================
+            case qc::OP_SUB_F:
+                m_globalData[st.c].f = m_globalData[st.a].f - m_globalData[st.b].f;
+                break;
+            case qc::OP_EQ_F:
+                m_globalData[st.c].f = (m_globalData[st.a].f == m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_NE_F:
+                m_globalData[st.c].f = (m_globalData[st.a].f != m_globalData[st.b].f) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_EQ_E:
+            case qc::OP_EQ_FNC:
+                m_globalData[st.c].f = (m_globalData[st.a].i == m_globalData[st.b].i) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_NE_E:
+            case qc::OP_NE_FNC:
+                m_globalData[st.c].f = (m_globalData[st.a].i != m_globalData[st.b].i) ? 1.0f : 0.0f;
+                break;
+            case qc::OP_EQ_S: {
+                if (m_globalData[st.a].string == m_globalData[st.b].string) {
+                    m_globalData[st.c].f = 1.0f; // Fast pointer check
+                } else {
+                    // Deep string content check
+                    std::string s1 = GetProgsString(m_globalData[st.a].string);
+                    std::string s2 = GetProgsString(m_globalData[st.b].string);
+                    m_globalData[st.c].f = (s1 == s2) ? 1.0f : 0.0f;
+                }
+                break;
+            }
+            case qc::OP_NE_S: {
+                if (m_globalData[st.a].string == m_globalData[st.b].string) {
+                    m_globalData[st.c].f = 0.0f;
+                } else {
+                    std::string s1 = GetProgsString(m_globalData[st.a].string);
+                    std::string s2 = GetProgsString(m_globalData[st.b].string);
+                    m_globalData[st.c].f = (s1 != s2) ? 1.0f : 0.0f;
+                }
+                break;
+            }
+
             case qc::OP_CALL0:
             case qc::OP_CALL1:
             case qc::OP_CALL2:
