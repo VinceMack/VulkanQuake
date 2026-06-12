@@ -315,4 +315,43 @@ void VirtualMachine::Execute(int32_t funcIndex) {
     std::cout << "=== VM Halted: Runaway loop detected ===\n";
 }
 
+int32_t VirtualMachine::FindFieldOffset(const std::string& name) const {
+    for (const auto& def : m_fieldDefs) {
+        const char* defName = m_strings + def.s_name;
+        if (name == defName) {
+            return def.offset;
+        }
+    }
+    return -1;
+}
+
+int32_t VirtualMachine::AllocateEdict() {
+    // Edict 0 is the World. We start searching at 1.
+    for (size_t i = 1; i < m_edicts.size(); ++i) {
+        if (m_edicts[i].isFree) {
+            m_edicts[i].isFree = false;
+            // Clear memory
+            for (auto& val : m_edicts[i].v) val.i = 0;
+            return static_cast<int32_t>(i);
+        }
+    }
+    throw std::runtime_error("VM Error: Out of Edicts (Max 1024)!");
+}
+
+void VirtualMachine::SetEdictFieldFloat(int32_t edictIdx, int32_t offset, float val) {
+    if (offset != -1) m_edicts[edictIdx].v[offset].f = val;
+}
+
+void VirtualMachine::SetEdictFieldVector(int32_t edictIdx, int32_t offset, glm::vec3 val) {
+    if (offset != -1) {
+        m_edicts[edictIdx].v[offset + 0].f = val.x;
+        m_edicts[edictIdx].v[offset + 1].f = val.y;
+        m_edicts[edictIdx].v[offset + 2].f = val.z;
+    }
+}
+
+void VirtualMachine::SetGlobalEdict(int32_t offset, int32_t edictIdx) {
+    if (offset != -1) m_globalData[offset].edict = edictIdx;
+}
+
 } // namespace engine

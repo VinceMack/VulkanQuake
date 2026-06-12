@@ -3,6 +3,7 @@
 #include <vector>
 #include <span>
 #include <string>
+#include <glm/glm.hpp>
 
 namespace engine {
 
@@ -45,6 +46,17 @@ public:
 
     // Helper to read strings out of QuakeC memory
     std::string GetProgsString(int32_t stringOffset) const;
+
+    // Field Lookups
+    int32_t FindFieldOffset(const std::string& name) const;
+    
+    // Edict Management
+    int32_t AllocateEdict();
+    void SetEdictFieldFloat(int32_t edictIdx, int32_t offset, float val);
+    void SetEdictFieldVector(int32_t edictIdx, int32_t offset, glm::vec3 val);
+    
+    // Set a global variable to an Entity/Edict index
+    void SetGlobalEdict(int32_t offset, int32_t edictIdx);
 
 private:
     std::vector<std::byte> m_rawData;

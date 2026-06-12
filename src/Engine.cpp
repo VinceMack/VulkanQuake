@@ -117,35 +117,7 @@ void Engine::Init() {
         throw std::runtime_error("ERROR: Could not find or read pak0.pak!");
     }
 
-    // Add this right after you mount the VFS:
-    auto progsData = m_vfs->ReadFile("progs.dat");
-    if (progsData) {
-        m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
-        m_vm->PrintInfo();
 
-        // ---> NEW: Test the Engine-to-VM Memory Bridge
-        int32_t timeOffset = m_vm->FindGlobalOffset("time");
-        int32_t frametimeOffset = m_vm->FindGlobalOffset("frametime");
-        int32_t selfOffset = m_vm->FindGlobalOffset("self");
-
-        std::cout << "--- QuakeC Variable Offsets ---\n";
-        std::cout << "time offset: " << timeOffset << "\n";
-        std::cout << "frametime offset: " << frametimeOffset << "\n";
-        std::cout << "self offset: " << selfOffset << "\n";
-
-        // Let's write to VM memory, and read it back!
-        if (timeOffset != -1) {
-            m_vm->SetGlobalFloat(timeOffset, 123.45f);
-            float readBack = m_vm->GetGlobalFloat(timeOffset);
-            std::cout << "Wrote 123.45 to 'time', read back: " << readBack << "\n";
-        }
-
-        // ---> UPDATED: Execute the actual map setup function!
-        std::cout << "\nAttempting to execute QuakeC 'worldspawn'...\n";
-        m_vm->Execute("worldspawn");
-    } else {
-        std::cerr << "CRITICAL ERROR: Could not find progs.dat!\n";
-    }
 
     // 2. Initialize Console
     m_console = std::make_unique<Console>();
@@ -437,6 +409,42 @@ bool Engine::LoadMap(const std::string& mapName) {
     } else {
         m_player->Spawn(glm::vec3(0.0f), 0.0f);
         m_console->Print("WARNING: No spawn point found.");
+    }
+
+    // 7. Load the VM and run spawning loop
+    auto progsData = m_vfs->ReadFile("progs.dat");
+    if (progsData) {
+        m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
+        m_console->Print("Executing worldspawn...");
+        m_vm->Execute("worldspawn");
+
+        // Cache necessary VM offsets for speed
+        int32_t globalSelfOffset = m_vm->FindGlobalOffset("self");
+        int32_t fieldOriginOffset = m_vm->FindFieldOffset("origin");
+        int32_t fieldAngleOffset = m_vm->FindFieldOffset("angle");
+
+        m_console->Print("VM Spawning Entities...");
+
+        // Loop over the C++ parsed map entities
+        for (const auto& ent : m_map->GetEntities()) {
+            std::string cls = ent.GetClassname();
+            
+            // Skip worldspawn, as we already executed it!
+            if (cls == "worldspawn") continue;
+
+            // Allocate memory inside the VM for this entity
+            int32_t edictIdx = m_vm->AllocateEdict();
+
+            // Write the properties from the C++ Entity into the QuakeC Edict memory!
+            m_vm->SetEdictFieldVector(edictIdx, fieldOriginOffset, ent.GetVector("origin"));
+            m_vm->SetEdictFieldFloat(edictIdx, fieldAngleOffset, ent.GetFloat("angle"));
+            
+            // Tell the VM: "The entity you are currently acting on is THIS one."
+            m_vm->SetGlobalEdict(globalSelfOffset, edictIdx);
+
+            // Tell the VM: "Run the initialization script for this classname!"
+            m_vm->Execute(cls);
+        }
     }
 
     return true;
