@@ -16,6 +16,7 @@ struct RenderVertex {
     glm::vec2 uv;       // Texture coordinates
     glm::vec2 lightmapUV; // For future lightmap support
     uint32_t textureId; // Which texture does this vertex use?
+    uint8_t styles[4];  // <--- NEW: Stores the 4 lightstyle IDs for this face
 };
 
 // Holds our extracted, Vulkan-ready RGBA pixels

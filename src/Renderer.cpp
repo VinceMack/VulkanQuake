@@ -60,12 +60,18 @@ Renderer::~Renderer() {
     if (m_descriptorPool) vkDestroyDescriptorPool(m_vkbDevice.device, m_descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(m_vkbDevice.device, m_descriptorSetLayout, nullptr);
 
+    if (m_globalDescriptorLayout) vkDestroyDescriptorSetLayout(m_vkbDevice.device, m_globalDescriptorLayout, nullptr);
+    if (m_globalDescriptorPool) vkDestroyDescriptorPool(m_vkbDevice.device, m_globalDescriptorPool, nullptr);
+
     // 5. Destroy Images and Buffers
     vkDestroyImageView(m_vkbDevice.device, m_depthBuffer.view, nullptr);
     vmaDestroyImage(m_allocator, m_depthBuffer.image, m_depthBuffer.allocation);
 
     m_vertexBuffer.Destroy();
     for (auto& buffer : m_dynamicIndexBuffers) {
+        buffer.Destroy();
+    }
+    for (auto& buffer : m_dynamicLightstyleUBOs) {
         buffer.Destroy();
     }
     for (auto& buffer : m_dynamicUIBuffers) {
@@ -175,14 +181,16 @@ void Renderer::InitPipeline() {
     m_modelFragShader = engine::Shader::LoadModule(m_vkbDevice.device, mdlFragPath);
 
     m_descriptorSetLayout = engine::PipelineSetup::CreateDescriptorSetLayout(m_vkbDevice.device);
+    m_globalDescriptorLayout = engine::PipelineSetup::CreateGlobalDescriptorSetLayout(m_vkbDevice.device);
+    
     m_depthBuffer = engine::PipelineSetup::CreateDepthBuffer(m_vkbDevice.device, m_allocator, m_swapchainExtent);
     m_renderPass = engine::PipelineSetup::CreateRenderPass(m_vkbDevice.device, m_swapchainFormat);
     m_framebuffers = engine::PipelineSetup::CreateFramebuffers(m_vkbDevice.device, m_renderPass, m_swapchainExtent, m_swapchainImageViews, m_depthBuffer.view);
-    m_pipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_descriptorSetLayout);
+    m_pipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, {m_descriptorSetLayout, m_globalDescriptorLayout});
     m_graphicsPipeline = engine::PipelineSetup::CreateGraphicsPipeline(m_vkbDevice.device, m_renderPass, m_pipelineLayout, m_vertShader, m_fragShader, m_swapchainExtent);
 
     m_modelDescriptorLayout = engine::PipelineSetup::CreateSingleTextureDescriptorLayout(m_vkbDevice.device);
-    m_modelPipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, m_modelDescriptorLayout, sizeof(RenderPushConstants));
+    m_modelPipelineLayout = engine::PipelineSetup::CreatePipelineLayout(m_vkbDevice.device, {m_modelDescriptorLayout});
     m_modelPipeline = engine::PipelineSetup::CreateModelGraphicsPipeline(
         m_vkbDevice.device, m_renderPass, m_modelPipelineLayout, m_modelVertShader, m_modelFragShader, m_swapchainExtent);
 
@@ -322,6 +330,49 @@ for (size_t i = 0; i < m_gpuTextures.size(); i++) {
             vkUpdateDescriptorSets(m_vkbDevice.device, 2, descriptorWrites.data(), 0, nullptr);
         }
     }
+
+    // Create Global UBOs and Sets
+    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
+        m_dynamicLightstyleUBOs.push_back(engine::CreateDynamicBuffer(vkCtx, 64 * sizeof(float), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT));
+    }
+
+    VkDescriptorPoolSize poolSizeUbo{};
+    poolSizeUbo.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizeUbo.descriptorCount = m_maxFramesInFlight;
+
+    VkDescriptorPoolCreateInfo poolInfoUbo{};
+    poolInfoUbo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfoUbo.poolSizeCount = 1;
+    poolInfoUbo.pPoolSizes = &poolSizeUbo;
+    poolInfoUbo.maxSets = m_maxFramesInFlight;
+    vkCreateDescriptorPool(m_vkbDevice.device, &poolInfoUbo, nullptr, &m_globalDescriptorPool);
+
+    std::vector<VkDescriptorSetLayout> globalLayouts(m_maxFramesInFlight, m_globalDescriptorLayout);
+    VkDescriptorSetAllocateInfo allocInfoGlobal{};
+    allocInfoGlobal.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfoGlobal.descriptorPool = m_globalDescriptorPool;
+    allocInfoGlobal.descriptorSetCount = m_maxFramesInFlight;
+    allocInfoGlobal.pSetLayouts = globalLayouts.data();
+    
+    m_globalDescriptorSets.resize(m_maxFramesInFlight);
+    vkAllocateDescriptorSets(m_vkbDevice.device, &allocInfoGlobal, m_globalDescriptorSets.data());
+
+    for (uint32_t i = 0; i < m_maxFramesInFlight; i++) {
+        VkDescriptorBufferInfo bufferInfo{};
+        bufferInfo.buffer = m_dynamicLightstyleUBOs[i].buffer;
+        bufferInfo.offset = 0;
+        bufferInfo.range = 64 * sizeof(float);
+
+        VkWriteDescriptorSet write{};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = m_globalDescriptorSets[i];
+        write.dstBinding = 0;
+        write.dstArrayElement = 0;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        write.descriptorCount = 1;
+        write.pBufferInfo = &bufferInfo;
+        vkUpdateDescriptorSets(m_vkbDevice.device, 1, &write, 0, nullptr);
+    }
 }
 
 uint32_t Renderer::UploadAliasModel(const AliasModel& model) {
@@ -400,9 +451,14 @@ void Renderer::UploadFont(const TextureData& fontData) {
 
 void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, 
                          const RenderEntity* viewModel, const std::vector<UIVertex>& uiVertices,
-                         float totalTime) {
+                         float totalTime, const float* lightstyles) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
+
+    // Copy the 64 floats to the UBO immediately!
+    if (lightstyles && !m_dynamicLightstyleUBOs.empty()) {
+        memcpy(m_dynamicLightstyleUBOs[m_currentFrame].mappedData, lightstyles, 64 * sizeof(float));
+    }
 
     // PVS CULLING HAPPENS HERE!
     std::vector<uint32_t> visibleIndices;
@@ -453,6 +509,11 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 proj = glm::perspective(glm::radians(75.0f), (float)m_swapchainExtent.width / (float)m_swapchainExtent.height, 0.1f, 10000.0f);
     proj[1][1] *= -1; 
+
+    // ---> NEW: Bind Set 1 (Global UBO) once per frame!
+    if (!m_globalDescriptorSets.empty()) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 1, 1, &m_globalDescriptorSets[m_currentFrame], 0, nullptr);
+    }
 
     // Use the dynamically built batches
     for (const auto& batch : visibleBatches) {
@@ -670,11 +731,20 @@ void Renderer::UnloadMap() {
     for (auto& buf : m_dynamicIndexBuffers) buf.Destroy();
     m_dynamicIndexBuffers.clear();
 
+    for (auto& buf : m_dynamicLightstyleUBOs) buf.Destroy();
+    m_dynamicLightstyleUBOs.clear();
+
     if (m_descriptorPool) {
         vkDestroyDescriptorPool(m_vkbDevice.device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
     }
     m_descriptorSets.clear();
+
+    if (m_globalDescriptorPool) {
+        vkDestroyDescriptorPool(m_vkbDevice.device, m_globalDescriptorPool, nullptr);
+        m_globalDescriptorPool = VK_NULL_HANDLE;
+    }
+    m_globalDescriptorSets.clear();
 }
 
 } // namespace engine

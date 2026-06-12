@@ -37,6 +37,25 @@ VkDescriptorSetLayout PipelineSetup::CreateDescriptorSetLayout(VkDevice device) 
     return descriptorSetLayout;
 }
 
+VkDescriptorSetLayout PipelineSetup::CreateGlobalDescriptorSetLayout(VkDevice device) {
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding = 0;
+    uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboBinding;
+
+    VkDescriptorSetLayout layout;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &layout) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create global descriptor set layout");
+    }
+    return layout;
+}
+
 DepthBuffer PipelineSetup::CreateDepthBuffer(VkDevice device, VmaAllocator allocator, VkExtent2D extent) {
     DepthBuffer depth;
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
@@ -146,7 +165,7 @@ std::vector<VkFramebuffer> PipelineSetup::CreateFramebuffers(VkDevice device, Vk
     return framebuffers;
 }
 
-VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout, uint32_t pushConstantSize) {
+VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device, const std::vector<VkDescriptorSetLayout>& layouts) {
     VkPushConstantRange pushConstant{};
     pushConstant.offset = 0;
     pushConstant.size = 128; // <--- Force 128 bytes universally
@@ -156,8 +175,8 @@ VkPipelineLayout PipelineSetup::CreatePipelineLayout(VkDevice device, VkDescript
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
+    pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(layouts.size());
+    pipelineLayoutInfo.pSetLayouts = layouts.data();
     pipelineLayoutInfo.pushConstantRangeCount = 1;
     pipelineLayoutInfo.pPushConstantRanges = &pushConstant;
 
@@ -190,7 +209,7 @@ VkPipeline PipelineSetup::CreateGraphicsPipeline(VkDevice device, VkRenderPass r
     bindingDescription.stride = sizeof(engine::RenderVertex);
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
+    std::array<VkVertexInputAttributeDescription, 4> attributeDescriptions{};
     // Position
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
@@ -206,6 +225,11 @@ VkPipeline PipelineSetup::CreateGraphicsPipeline(VkDevice device, VkRenderPass r
     attributeDescriptions[2].location = 2;
     attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
     attributeDescriptions[2].offset = offsetof(engine::RenderVertex, lightmapUV);
+    // Lightstyles
+    attributeDescriptions[3].binding = 0;
+    attributeDescriptions[3].location = 3;
+    attributeDescriptions[3].format = VK_FORMAT_R8G8B8A8_UINT;
+    attributeDescriptions[3].offset = offsetof(engine::RenderVertex, styles);
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
