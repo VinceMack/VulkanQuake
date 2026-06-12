@@ -15,6 +15,7 @@ public:
     glm::vec3   GetVector(const std::string& key, const glm::vec3& fallback = glm::vec3(0.0f)) const;
 
     std::string GetClassname() const { return GetString("classname"); }
+    const std::unordered_map<std::string, std::string>& GetProperties() const { return m_properties; }
 
 private:
     std::unordered_map<std::string, std::string> m_properties;

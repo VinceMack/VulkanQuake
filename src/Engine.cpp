@@ -415,6 +415,128 @@ bool Engine::LoadMap(const std::string& mapName) {
     auto progsData = m_vfs->ReadFile("progs.dat");
     if (progsData) {
         m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
+        
+        // 1. Cache the specific VM offsets we need for fast Built-in access
+        int32_t ofs_self = m_vm->FindGlobalOffset("self");
+        int32_t ofs_origin = m_vm->FindFieldOffset("origin");
+        int32_t ofs_mins = m_vm->FindFieldOffset("mins");
+        int32_t ofs_maxs = m_vm->FindFieldOffset("maxs");
+        int32_t ofs_flags = m_vm->FindFieldOffset("flags");
+
+        // 2. Attach the C++ Router to the VM
+        m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags](VirtualMachine& vm, int32_t bIdx) {
+            switch (bIdx) {
+                case 2: { // setorigin(entity e, vector v)
+                    int32_t targetEnt = vm.GetParmEdict(0);
+                    glm::vec3 v = vm.GetParmVector(1);
+                    vm.SetEdictFieldVector(targetEnt, ofs_origin, v);
+                    break;
+                }
+                case 3: { // setmodel(entity e, string m)
+                    // QuakeC telling us to load a model! We will hook this to the spawner later.
+                    break;
+                }
+                case 4: { // setsize(entity e, vector min, vector max)
+                    int32_t targetEnt = vm.GetParmEdict(0);
+                    vm.SetEdictFieldVector(targetEnt, ofs_mins, vm.GetParmVector(1));
+                    vm.SetEdictFieldVector(targetEnt, ofs_maxs, vm.GetParmVector(2));
+                    break;
+                }
+                case 19: // precache_sound
+                case 20: // precache_model
+                case 68: // precache_file
+                case 75: // precache_model2
+                case 76: // precache_sound2
+                case 77: // precache_file2
+                    // QuakeC expects precache builtins to return the string index they were passed!
+                    // This is a weird Quake quirk.
+                    vm.SetReturnStringOffset(vm.m_globalData[4].string); // Return Parm0 string offset
+                    break;
+                case 25: { // dprint(string)
+                    m_console->Print("[QC] " + vm.GetParmString(0));
+                    break;
+                }
+                case 35: { // lightstyle(float style, string value)
+                    int32_t styleIdx = static_cast<int32_t>(vm.GetParmFloat(0));
+                    std::string val = vm.GetParmString(1);
+                    if (styleIdx >= 0 && styleIdx < 64) {
+                        m_lightstyles[styleIdx] = val;
+                    }
+                    break;
+                }
+                case 39: { // droptofloor()
+                    // Traces down 256 units from `self.origin`.
+                    int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
+                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
+                    
+                    // Trace down! (We pass an empty entity list because during spawn, m_renderEntities isn't populated yet)
+                    std::vector<RenderEntity> emptyList; 
+                    TraceResult trace = m_physics->TraceHull(origin, origin - glm::vec3(0.0f, 0.0f, 256.0f), 1, emptyList);
+                    
+                    if (trace.allSolid || trace.fraction == 1.0f) {
+                        vm.SetReturnFloat(0.0f); // Failed to find floor
+                    } else {
+                        // Success! Update origin, set ONGROUND flag, return 1
+                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
+                        
+                        // Bitwise OR the FL_ONGROUND flag (512)
+                        int32_t flags = static_cast<int32_t>(vm.GetEdictFieldFloat(selfIdx, ofs_flags));
+                        vm.SetEdictFieldFloat(selfIdx, ofs_flags, static_cast<float>(flags | 512));
+                        
+                        vm.SetReturnFloat(1.0f);
+                    }
+                    break;
+                }
+                case 11: { // objerror(string e)
+                    std::cout << "[QC ObjError] " << vm.GetParmString(0) << "\n";
+                    std::cout.flush();
+                    throw std::runtime_error("VM Error: objerror: " + vm.GetParmString(0));
+                    break;
+                }
+                case 14: { // spawn() -> returns entity
+                    int32_t newEnt = vm.AllocateEdict();
+                    vm.SetReturnEdict(newEnt);
+                    break;
+                }
+                case 15: { // remove(entity e)
+                    int32_t targetEnt = vm.GetParmEdict(0);
+                    if (targetEnt > 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
+                        vm.m_edicts[targetEnt].isFree = true;
+                    }
+                    break;
+                }
+                case 43: { // fabs(float f)
+                    vm.SetReturnFloat(std::abs(vm.GetParmFloat(0)));
+                    break;
+                }
+                case 51: { // makestatic(entity e)
+                    // QuakeC pushes an entity to the static list, we ignore for now
+                    break;
+                }
+                case 72: { // cvar_set(string var, string val)
+                    // Stub for console variable set
+                    break;
+                }
+                case 74: { // ambientsound(vector pos, string sample, float vol, float attn)
+                    // Stub for ambient sound
+                    break;
+                }
+                case 7: { // random() -> returns float [0, 1)
+                    vm.SetReturnFloat(static_cast<float>(rand()) / static_cast<float>(RAND_MAX));
+                    break;
+                }
+                case 34: { // sound(entity e, float chan, string samp, float vol, float attn)
+                    // Stub for sound playing
+                    break;
+                }
+                default: {
+                    std::cout << "[QC Builtin Warning] Unhandled Built-in #" << bIdx << "\n";
+                    std::cout.flush();
+                    break;
+                }
+            }
+        });
+
         m_console->Print("Executing worldspawn...");
         m_vm->Execute("worldspawn");
 
@@ -436,8 +558,9 @@ bool Engine::LoadMap(const std::string& mapName) {
             int32_t edictIdx = m_vm->AllocateEdict();
 
             // Write the properties from the C++ Entity into the QuakeC Edict memory!
-            m_vm->SetEdictFieldVector(edictIdx, fieldOriginOffset, ent.GetVector("origin"));
-            m_vm->SetEdictFieldFloat(edictIdx, fieldAngleOffset, ent.GetFloat("angle"));
+            for (const auto& [key, value] : ent.GetProperties()) {
+                m_vm->SetEdictFieldFromString(edictIdx, key, value);
+            }
             
             // Tell the VM: "The entity you are currently acting on is THIS one."
             m_vm->SetGlobalEdict(globalSelfOffset, edictIdx);
