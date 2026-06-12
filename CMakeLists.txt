@@ -104,6 +104,9 @@ add_executable(VulkanQuake
     src/UI.hpp
     src/VirtualFileSystem.cpp
     src/VirtualFileSystem.hpp
+    src/ProgsFormat.hpp
+    src/VirtualMachine.hpp
+    src/VirtualMachine.cpp
     src/vk_mem_alloc.cpp
     src/Window.cpp
     src/Window.hpp

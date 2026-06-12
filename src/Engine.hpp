@@ -8,6 +8,7 @@
 #include "RenderEntity.hpp"
 #include "VirtualFileSystem.hpp"
 #include "Console.hpp"
+#include "VirtualMachine.hpp"
 #include <memory>
 #include <vector>
 #include <unordered_map>
@@ -48,6 +49,7 @@ private:
 
     // ---> NEW: Promote VFS to member variable
     std::unique_ptr<engine::vfs::VirtualFileSystem> m_vfs;
+    std::unique_ptr<VirtualMachine> m_vm;
     
     std::string m_lightstyles[64]; // <--- NEW: Dynamic lightstyle animations
     

@@ -117,6 +117,15 @@ void Engine::Init() {
         throw std::runtime_error("ERROR: Could not find or read pak0.pak!");
     }
 
+    // Add this right after you mount the VFS:
+    auto progsData = m_vfs->ReadFile("progs.dat");
+    if (progsData) {
+        m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
+        m_vm->PrintInfo();
+    } else {
+        std::cerr << "CRITICAL ERROR: Could not find progs.dat!\n";
+    }
+
     // 2. Initialize Console
     m_console = std::make_unique<Console>();
     SDL_StartTextInput(m_window->GetHandle());
