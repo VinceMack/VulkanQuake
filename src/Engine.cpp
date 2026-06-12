@@ -321,32 +321,58 @@ bool Engine::LoadMap(const std::string& mapName) {
             rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
             rent.frame = 0;
             
-            // ---> NEW: Classify Triggers and Illusionary walls
             std::string cls = ent.GetClassname();
             rent.isSolid = true;
             rent.isVisible = true;
             rent.isTrigger = false;
+            rent.brushState = BrushState::Static; // Default to static
 
-            // If the classname contains "trigger", it's an invisible hit-box
             if (cls.find("trigger_") != std::string::npos) {
                 rent.isSolid = false;
                 rent.isVisible = false;
-                rent.isTrigger = true; // <--- Mark as trigger!
-                
-                // If it's a level transition, grab the destination map
+                rent.isTrigger = true;
                 if (cls == "trigger_changelevel") {
                     rent.triggerTarget = ent.GetString("map");
                 }
-            } 
-            // func_illusionary is a visible wall that you can walk right through
-            else if (cls == "func_illusionary") {
+            } else if (cls == "func_illusionary") {
                 rent.isSolid = false;
+            } 
+            // ==============================================================
+            // ---> NEW: func_door Kinematics Math
+            // ==============================================================
+            else if (cls == "func_door" || cls == "func_water" || cls == "func_door_secret") {
+                rent.brushState = BrushState::Closed;
+                rent.pos1 = rent.origin; // Starts closed
+                
+                float angle = ent.GetFloat("angle", 0.0f);
+                rent.speed = ent.GetFloat("speed", 100.0f);
+                rent.wait = ent.GetFloat("wait", 3.0f);
+                float lip = ent.GetFloat("lip", 8.0f);
+                
+                // Determine direction of movement
+                glm::vec3 dir(0.0f);
+                if (angle == -1.0f) dir = glm::vec3(0.0f, 0.0f, 1.0f);       // UP
+                else if (angle == -2.0f) dir = glm::vec3(0.0f, 0.0f, -1.0f); // DOWN
+                else {
+                    dir.x = std::cos(glm::radians(angle));
+                    dir.y = std::sin(glm::radians(angle));
+                }
+                
+                const auto& bspModel = m_map->GetBspModel(rent.modelId);
+                glm::vec3 extents = glm::vec3(bspModel.maxs[0] - bspModel.mins[0],
+                                              bspModel.maxs[1] - bspModel.mins[1],
+                                              bspModel.maxs[2] - bspModel.mins[2]);
+                
+                // Quake calculates move distance based on the size of the door along the move axis, minus the lip
+                float moveDist = std::abs(glm::dot(extents, dir)) - lip;
+                rent.pos2 = rent.pos1 + (dir * moveDist); // Open position
+                rent.stateTimer = 0.0f;
             }
 
-            // ---> NEW: Precompute Absolute Bounding Box for fast overlap checks
+            // Save local bounding box (for moving collisions)
             const auto& bspModel = m_map->GetBspModel(rent.modelId);
-            rent.bboxMin = rent.origin + glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
-            rent.bboxMax = rent.origin + glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
+            rent.localMins = glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
+            rent.localMaxs = glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
 
             m_renderEntities.push_back(rent);
         }
@@ -436,16 +462,66 @@ void Engine::MainLoop() {
         // ========================================================================
         // Entity Simulation (The Game Tick)
         // ========================================================================
-        float animationSpeed = 10.0f; // 10 FPS animations
+        float animationSpeed = 10.0f; 
         
+        // 1. Proximity Trigger check for doors
+        // We expand the player's bounding box by 32 units to "reach out" and touch doors
+        glm::vec3 pTouchMins = m_player->GetPosition() + glm::vec3(-48.0f, -48.0f, -10.0f);
+        glm::vec3 pTouchMaxs = m_player->GetPosition() + glm::vec3(48.0f, 48.0f, 66.0f);
+
         for (auto& rent : m_renderEntities) {
+            // Animate Alias Models
             if (rent.type == EntityModelType::Alias) {
-                // Animate the models
                 rent.interp += animationSpeed * deltaTime;
                 if (rent.interp >= 1.0f) {
                     rent.interp -= 1.0f;
                     rent.frame = rent.nextFrame;
                     rent.nextFrame = rent.frame + 1;
+                }
+            } 
+            // ---> NEW: Process Brush Kinematics
+            else if (rent.type == EntityModelType::BspBrush) {
+                
+                // If it's closed, see if the player bumped into it
+                if (rent.brushState == BrushState::Closed) {
+                    glm::vec3 dMins = rent.GetAbsMins();
+                    glm::vec3 dMaxs = rent.GetAbsMaxs();
+                    
+                    if (pTouchMins.x <= dMaxs.x && pTouchMaxs.x >= dMins.x &&
+                        pTouchMins.y <= dMaxs.y && pTouchMaxs.y >= dMins.y &&
+                        pTouchMins.z <= dMaxs.z && pTouchMaxs.z >= dMins.z) {
+                        
+                        rent.brushState = BrushState::Opening; // Open sesame!
+                    }
+                }
+                
+                // State Machine Execution
+                if (rent.brushState == BrushState::Opening) {
+                    glm::vec3 dir = glm::normalize(rent.pos2 - rent.pos1);
+                    rent.origin += dir * rent.speed * deltaTime;
+                    
+                    // Did we reach the destination?
+                    if (glm::distance(rent.origin, rent.pos1) >= glm::distance(rent.pos2, rent.pos1)) {
+                        rent.origin = rent.pos2; // Clamp
+                        rent.brushState = BrushState::Open;
+                        rent.stateTimer = 0.0f; // Reset wait timer
+                    }
+                } 
+                else if (rent.brushState == BrushState::Open) {
+                    rent.stateTimer += deltaTime;
+                    if (rent.stateTimer >= rent.wait) {
+                        rent.brushState = BrushState::Closing;
+                    }
+                } 
+                else if (rent.brushState == BrushState::Closing) {
+                    glm::vec3 dir = glm::normalize(rent.pos1 - rent.pos2);
+                    rent.origin += dir * rent.speed * deltaTime;
+                    
+                    // Did we reach the start?
+                    if (glm::distance(rent.origin, rent.pos2) >= glm::distance(rent.pos1, rent.pos2)) {
+                        rent.origin = rent.pos1; // Clamp
+                        rent.brushState = BrushState::Closed;
+                    }
                 }
             }
         }

@@ -5,33 +5,42 @@
 
 namespace engine {
 
-enum class EntityModelType {
-    BspBrush,
-    Alias
-};
+enum class EntityModelType { BspBrush, Alias };
 
-// This is the data structure that will eventually be populated by network packets!
+// ---> NEW: State machine for moving brushes
+enum class BrushState { Static, Closed, Opening, Open, Closing };
+
 struct RenderEntity {
-    uint32_t modelId;      // Which BSP Sub-Model (or .mdl later) to draw
-    EntityModelType type;  // Tells the renderer which pipeline to use
-    glm::vec3 origin;      // 3D position
-    glm::vec3 angles;      // Pitch, Yaw, Roll
-    uint32_t frame;        // For animation
+    uint32_t modelId;
+    EntityModelType type;
+    glm::vec3 origin;
+    glm::vec3 angles;
+    uint32_t frame;
     uint32_t nextFrame;
     float interp;
 
-    // ---> NEW FLAGS
     bool isSolid = true;   
     bool isVisible = true; 
-
-    // ---> NEW: Trigger logic data
     bool isTrigger = false;
-    std::string triggerTarget; // E.g., "e1m2"
-    glm::vec3 bboxMin;         // The absolute minimum X,Y,Z bounds
-    glm::vec3 bboxMax;         // The absolute maximum X,Y,Z bounds
+    std::string triggerTarget; 
 
-    // Helper to generate the exact Vulkan transformation matrix
+    // ---> UPDATED: Local bounds so they can move with the origin
+    glm::vec3 localMins; 
+    glm::vec3 localMaxs;
+
+    // ---> NEW: Kinematic state variables
+    BrushState brushState = BrushState::Static;
+    glm::vec3 pos1; // Closed position (usually 0,0,0 local)
+    glm::vec3 pos2; // Open position
+    float speed;
+    float wait;
+    float stateTimer;
+
     glm::mat4 GetTransformMatrix() const;
+    
+    // Helper to get absolute bounds
+    glm::vec3 GetAbsMins() const { return origin + localMins; }
+    glm::vec3 GetAbsMaxs() const { return origin + localMaxs; }
 };
 
 } // namespace engine

@@ -356,9 +356,9 @@ std::string Player::CheckTriggers(const std::vector<RenderEntity>& entities) {
         if (!ent.isTrigger) continue;
 
         // Standard 3D AABB Intersection Test
-        bool overlapX = playerMins.x <= ent.bboxMax.x && playerMaxs.x >= ent.bboxMin.x;
-        bool overlapY = playerMins.y <= ent.bboxMax.y && playerMaxs.y >= ent.bboxMin.y;
-        bool overlapZ = playerMins.z <= ent.bboxMax.z && playerMaxs.z >= ent.bboxMin.z;
+        bool overlapX = playerMins.x <= ent.GetAbsMaxs().x && playerMaxs.x >= ent.GetAbsMins().x;
+        bool overlapY = playerMins.y <= ent.GetAbsMaxs().y && playerMaxs.y >= ent.GetAbsMins().y;
+        bool overlapZ = playerMins.z <= ent.GetAbsMaxs().z && playerMaxs.z >= ent.GetAbsMins().z;
 
         if (overlapX && overlapY && overlapZ) {
             // We stepped into a trigger!
