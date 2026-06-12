@@ -281,129 +281,21 @@ bool Engine::LoadMap(const std::string& mapName) {
     m_physics = std::make_unique<Physics>(m_map.get());
     m_player = std::make_unique<Player>(m_physics.get(), m_camera.get());
 
-    // 5. Parse Entities
+    // 5. Parse Entities (to find info_player_start first)
     glm::vec3 spawnOrigin(0.0f);
     float spawnAngle = 0.0f;
     bool foundSpawn = false;
 
-    std::unordered_map<std::string, std::string> classnameToMdl = {
-        {"monster_army", "progs/soldier.mdl"}, {"monster_dog", "progs/dog.mdl"},
-        {"monster_ogre", "progs/ogre.mdl"}, {"monster_demon1", "progs/demon.mdl"},
-        {"monster_shambler", "progs/shambler.mdl"}, {"monster_knight", "progs/knight.mdl"},
-        {"monster_zombie", "progs/zombie.mdl"}, {"item_armor1", "progs/armor.mdl"},
-        {"item_armor2", "progs/armor.mdl"}, {"item_armorInv", "progs/armor.mdl"},
-        {"weapon_nailgun", "progs/g_nail.mdl"}, {"weapon_supershotgun", "progs/g_shot.mdl"},
-        {"weapon_supernailgun", "progs/g_nail2.mdl"}, {"weapon_rocketlauncher", "progs/g_rock.mdl"},
-        {"weapon_grenadelauncher", "progs/g_rock.mdl"}, {"weapon_lightning", "progs/g_light.mdl"},
-        {"item_shells", "progs/m_shell.mdl"}, {"item_spikes", "progs/m_nail.mdl"},
-        {"item_rockets", "progs/m_rock.mdl"}, {"item_cells", "progs/m_light.mdl"},
-        {"item_health", "progs/m_health.mdl"},
-        // ---> NEW: Flame Models!
-        {"light_torch_small_walltorch", "progs/flame.mdl"},
-        {"light_flame_large_yellow", "progs/flame2.mdl"},
-        {"light_flame_small_yellow", "progs/flame2.mdl"},
-        {"light_flame_small_white", "progs/flame2.mdl"}
-    };
-
     for (const auto& ent : m_map->GetEntities()) {
         std::string cls = ent.GetClassname();
-
         if (cls == "info_player_start") {
             spawnOrigin = ent.GetVector("origin");
             spawnAngle = ent.GetFloat("angle");
             foundSpawn = true;
-        }
-        
-        std::string modelStr = ent.GetString("model");
-        if (!modelStr.empty() && modelStr[0] == '*') {
-            RenderEntity rent;
-            rent.type = EntityModelType::BspBrush;
-            rent.modelId = std::stoi(modelStr.substr(1));
-            rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
-            rent.angles = glm::vec3(0.0f, 0.0f, 0.0f); 
-            rent.frame = 0;
-            
-            std::string cls = ent.GetClassname();
-            rent.isSolid = true;
-            rent.isVisible = true;
-            rent.isTrigger = false;
-            rent.brushState = BrushState::Static; 
-
-            // ---> NEW: Extract Targeting Strings
-            rent.targetname = ent.GetString("targetname");
-            rent.target = ent.GetString("target");
-            
-            // In Quake, if an entity has a targetname, it ignores player touch!
-            rent.requireTrigger = !rent.targetname.empty(); 
-
-            if (cls.find("trigger_") != std::string::npos) {
-                rent.isSolid = false;
-                rent.isVisible = false;
-                rent.isTrigger = true;
-                if (cls == "trigger_changelevel") {
-                    rent.triggerTarget = ent.GetString("map");
-                }
-            } else if (cls == "func_illusionary") {
-                rent.isSolid = false;
-            } 
-            // ---> UPDATED: Added func_button and dynamic defaults
-            else if (cls == "func_door" || cls == "func_water" || cls == "func_door_secret" || cls == "func_button") {
-                rent.brushState = BrushState::Closed;
-                rent.pos1 = rent.origin; 
-                
-                // Buttons have different defaults than doors!
-                float defaultSpeed = (cls == "func_button") ? 40.0f : 100.0f;
-                float defaultWait  = (cls == "func_button") ? 1.0f : 3.0f;
-                float defaultLip   = (cls == "func_button") ? 4.0f : 8.0f;
-
-                float angle = ent.GetFloat("angle", 0.0f);
-                rent.speed = ent.GetFloat("speed", defaultSpeed);
-                rent.wait = ent.GetFloat("wait", defaultWait);
-                float lip = ent.GetFloat("lip", defaultLip);
-                
-                glm::vec3 dir(0.0f);
-                if (angle == -1.0f) dir = glm::vec3(0.0f, 0.0f, 1.0f);       // UP
-                else if (angle == -2.0f) dir = glm::vec3(0.0f, 0.0f, -1.0f); // DOWN
-                else {
-                    dir.x = std::cos(glm::radians(angle));
-                    dir.y = std::sin(glm::radians(angle));
-                }
-                
-                const auto& bspModel = m_map->GetBspModel(rent.modelId);
-                glm::vec3 extents = glm::vec3(bspModel.maxs[0] - bspModel.mins[0],
-                                              bspModel.maxs[1] - bspModel.mins[1],
-                                              bspModel.maxs[2] - bspModel.mins[2]);
-                
-                float moveDist = std::abs(glm::dot(extents, dir)) - lip;
-                rent.pos2 = rent.pos1 + (dir * moveDist); 
-                rent.stateTimer = 0.0f;
-            }
-
-            const auto& bspModel = m_map->GetBspModel(rent.modelId);
-            rent.localMins = glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
-            rent.localMaxs = glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
-
-            m_renderEntities.push_back(rent);
-        }
-
-        auto it = classnameToMdl.find(cls);
-        if (it != classnameToMdl.end()) {
-            uint32_t mdlId = LoadAliasModel(it->second, *paletteData);
-            if (mdlId != 0) {
-                RenderEntity rent;
-                rent.type = EntityModelType::Alias;
-                rent.modelId = mdlId;
-                rent.origin = ent.GetVector("origin", glm::vec3(0.0f));
-                rent.angles = glm::vec3(0.0f, ent.GetFloat("angle", 0.0f), 0.0f);
-                rent.frame = 0;
-                rent.nextFrame = 1;
-                rent.interp = static_cast<float>(rand() % 100) / 100.0f;
-                m_renderEntities.push_back(rent);
-            }
+            break;
         }
     }
 
-    // 6. Spawn the player
     if (foundSpawn) {
         m_player->Spawn(spawnOrigin, spawnAngle);
     } else {
@@ -429,17 +321,35 @@ bool Engine::LoadMap(const std::string& mapName) {
                 case 2: { // setorigin(entity e, vector v)
                     int32_t targetEnt = vm.GetParmEdict(0);
                     glm::vec3 v = vm.GetParmVector(1);
-                    vm.SetEdictFieldVector(targetEnt, ofs_origin, v);
+                    if (targetEnt >= 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
+                        vm.SetEdictFieldVector(targetEnt, ofs_origin, v);
+                    }
                     break;
                 }
                 case 3: { // setmodel(entity e, string m)
-                    // QuakeC telling us to load a model! We will hook this to the spawner later.
+                    int32_t targetEnt = vm.GetParmEdict(0);
+                    std::string modelName = vm.GetParmString(1);
+                    
+                    if (targetEnt >= 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
+                        int32_t ofs_modelindex = vm.FindFieldOffset("modelindex");
+                        if (ofs_modelindex != -1) {
+                            vm.SetEdictFieldFloat(targetEnt, ofs_modelindex, 1.0f);
+                        }
+                        
+                        int32_t ofs_model = vm.FindFieldOffset("model");
+                        if (ofs_model >= 0 && ofs_model < static_cast<int32_t>(vm.m_edicts[targetEnt].v.size())) {
+                            int32_t strOffset = vm.m_globalData[7].string; // Parm 1 string offset
+                            vm.m_edicts[targetEnt].v[ofs_model].string = strOffset;
+                        }
+                    }
                     break;
                 }
                 case 4: { // setsize(entity e, vector min, vector max)
                     int32_t targetEnt = vm.GetParmEdict(0);
-                    vm.SetEdictFieldVector(targetEnt, ofs_mins, vm.GetParmVector(1));
-                    vm.SetEdictFieldVector(targetEnt, ofs_maxs, vm.GetParmVector(2));
+                    if (targetEnt >= 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
+                        vm.SetEdictFieldVector(targetEnt, ofs_mins, vm.GetParmVector(1));
+                        vm.SetEdictFieldVector(targetEnt, ofs_maxs, vm.GetParmVector(2));
+                    }
                     break;
                 }
                 case 19: // precache_sound
@@ -467,23 +377,27 @@ bool Engine::LoadMap(const std::string& mapName) {
                 case 39: { // droptofloor()
                     // Traces down 256 units from `self.origin`.
                     int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
-                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
-                    
-                    // Trace down! (We pass an empty entity list because during spawn, m_renderEntities isn't populated yet)
-                    std::vector<RenderEntity> emptyList; 
-                    TraceResult trace = m_physics->TraceHull(origin, origin - glm::vec3(0.0f, 0.0f, 256.0f), 1, emptyList);
-                    
-                    if (trace.allSolid || trace.fraction == 1.0f) {
-                        vm.SetReturnFloat(0.0f); // Failed to find floor
+                    if (selfIdx >= 0 && selfIdx < static_cast<int32_t>(vm.m_edicts.size())) {
+                        glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
+                        
+                        // Trace down! (We pass an empty entity list because during spawn, m_renderEntities isn't populated yet)
+                        std::vector<RenderEntity> emptyList; 
+                        TraceResult trace = m_physics->TraceHull(origin, origin - glm::vec3(0.0f, 0.0f, 256.0f), 1, emptyList);
+                        
+                        if (trace.allSolid || trace.fraction == 1.0f) {
+                            vm.SetReturnFloat(0.0f); // Failed to find floor
+                        } else {
+                            // Success! Update origin, set ONGROUND flag, return 1
+                            vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
+                            
+                            // Bitwise OR the FL_ONGROUND flag (512)
+                            int32_t flags = static_cast<int32_t>(vm.GetEdictFieldFloat(selfIdx, ofs_flags));
+                            vm.SetEdictFieldFloat(selfIdx, ofs_flags, static_cast<float>(flags | 512));
+                            
+                            vm.SetReturnFloat(1.0f);
+                        }
                     } else {
-                        // Success! Update origin, set ONGROUND flag, return 1
-                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
-                        
-                        // Bitwise OR the FL_ONGROUND flag (512)
-                        int32_t flags = static_cast<int32_t>(vm.GetEdictFieldFloat(selfIdx, ofs_flags));
-                        vm.SetEdictFieldFloat(selfIdx, ofs_flags, static_cast<float>(flags | 512));
-                        
-                        vm.SetReturnFloat(1.0f);
+                        vm.SetReturnFloat(0.0f);
                     }
                     break;
                 }
@@ -557,6 +471,14 @@ bool Engine::LoadMap(const std::string& mapName) {
             // Allocate memory inside the VM for this entity
             int32_t edictIdx = m_vm->AllocateEdict();
 
+            // Set explicit fields
+            m_vm->SetEdictFieldVector(edictIdx, fieldOriginOffset, ent.GetVector("origin"));
+            m_vm->SetEdictFieldFloat(edictIdx, fieldAngleOffset, ent.GetFloat("angle"));
+            
+            // Pass spawnflags into QuakeC so it knows if a door is START_OPEN!
+            int32_t ofs_spawnflags = m_vm->FindFieldOffset("spawnflags");
+            m_vm->SetEdictFieldFloat(edictIdx, ofs_spawnflags, ent.GetFloat("spawnflags"));
+
             // Write the properties from the C++ Entity into the QuakeC Edict memory!
             for (const auto& [key, value] : ent.GetProperties()) {
                 m_vm->SetEdictFieldFromString(edictIdx, key, value);
@@ -567,6 +489,67 @@ bool Engine::LoadMap(const std::string& mapName) {
 
             // Tell the VM: "Run the initialization script for this classname!"
             m_vm->Execute(cls);
+        }
+
+        // ========================================================================
+        // ---> NEW: Sync VM Edicts to C++ RenderEntities
+        // ========================================================================
+        m_console->Print("Syncing VM Memory to Renderer...");
+        
+        int32_t ofs_model = m_vm->FindFieldOffset("model");
+        int32_t ofs_frame = m_vm->FindFieldOffset("frame");
+
+        if (ofs_model != -1 && ofs_frame != -1) {
+            const auto& edicts = m_vm->GetEdicts();
+            for (size_t edictIdx = 0; edictIdx < edicts.size(); ++edictIdx) {
+                const auto& edict = edicts[edictIdx];
+                if (edict.isFree) continue;
+
+                // Extract the model string offset
+                int32_t modelStrOffset = edict.v[ofs_model].string;
+                if (modelStrOffset <= 0) continue; // Invisible entity (like triggers!)
+
+                std::string modelName = m_vm->GetProgsString(modelStrOffset);
+                if (modelName.empty()) continue;
+
+                RenderEntity rent;
+                rent.origin = m_vm->GetEdictFieldVector(static_cast<int32_t>(edictIdx), fieldOriginOffset);
+                rent.angles = glm::vec3(0.0f, m_vm->GetEdictFieldFloat(static_cast<int32_t>(edictIdx), fieldAngleOffset), 0.0f);
+                rent.frame = static_cast<uint32_t>(m_vm->GetEdictFieldFloat(static_cast<int32_t>(edictIdx), ofs_frame));
+                rent.nextFrame = rent.frame + 1;
+                rent.interp = static_cast<float>(rand() % 100) / 100.0f;
+                rent.isSolid = true;
+                rent.isVisible = true;
+
+                if (modelName[0] == '*') {
+                    // It's a BSP Brush Entity! (Door, platform)
+                    rent.type = EntityModelType::BspBrush;
+                    rent.modelId = std::stoi(modelName.substr(1));
+
+                    // Grab the bounds for collision
+                    const auto& bspModel = m_map->GetBspModel(rent.modelId);
+                    rent.localMins = glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
+                    rent.localMaxs = glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
+                    
+                    // Set up C++ Kinematics (We will move this to QuakeC later)
+                    rent.brushState = BrushState::Closed;
+                    rent.pos1 = rent.origin;
+                    
+                    // Note: Because we haven't ported 'targetname' strings out of QuakeC yet, 
+                    // all doors will open on proximity for this specific test phase.
+                    rent.requireTrigger = false; 
+
+                } else {
+                    // It's an Alias Model! (Monster, Item)
+                    uint32_t mdlId = LoadAliasModel(modelName, *paletteData);
+                    if (mdlId == 0) continue; // Skip if failed to load
+                    
+                    rent.type = EntityModelType::Alias;
+                    rent.modelId = mdlId;
+                }
+
+                m_renderEntities.push_back(rent);
+            }
         }
     }
 

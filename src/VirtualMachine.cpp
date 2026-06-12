@@ -529,19 +529,27 @@ int32_t VirtualMachine::AllocateEdict() {
 }
 
 void VirtualMachine::SetEdictFieldFloat(int32_t edictIdx, int32_t offset, float val) {
-    if (offset != -1) m_edicts[edictIdx].v[offset].f = val;
+    if (edictIdx >= 0 && edictIdx < static_cast<int32_t>(m_edicts.size())) {
+        if (offset >= 0 && offset < static_cast<int32_t>(m_edicts[edictIdx].v.size())) {
+            m_edicts[edictIdx].v[offset].f = val;
+        }
+    }
 }
 
 void VirtualMachine::SetEdictFieldVector(int32_t edictIdx, int32_t offset, glm::vec3 val) {
-    if (offset != -1) {
-        m_edicts[edictIdx].v[offset + 0].f = val.x;
-        m_edicts[edictIdx].v[offset + 1].f = val.y;
-        m_edicts[edictIdx].v[offset + 2].f = val.z;
+    if (edictIdx >= 0 && edictIdx < static_cast<int32_t>(m_edicts.size())) {
+        if (offset >= 0 && offset + 2 < static_cast<int32_t>(m_edicts[edictIdx].v.size())) {
+            m_edicts[edictIdx].v[offset + 0].f = val.x;
+            m_edicts[edictIdx].v[offset + 1].f = val.y;
+            m_edicts[edictIdx].v[offset + 2].f = val.z;
+        }
     }
 }
 
 void VirtualMachine::SetGlobalEdict(int32_t offset, int32_t edictIdx) {
-    if (offset != -1) m_globalData[offset].edict = edictIdx;
+    if (offset >= 0 && offset < static_cast<int32_t>(m_globalData.size())) {
+        m_globalData[offset].edict = edictIdx;
+    }
 }
 
 int32_t VirtualMachine::GetGlobalEdict(int32_t offset) const {
@@ -550,13 +558,23 @@ int32_t VirtualMachine::GetGlobalEdict(int32_t offset) const {
 }
 
 float VirtualMachine::GetEdictFieldFloat(int32_t edictIdx, int32_t offset) const {
-    return m_edicts[edictIdx].v[offset].f;
+    if (edictIdx >= 0 && edictIdx < static_cast<int32_t>(m_edicts.size())) {
+        if (offset >= 0 && offset < static_cast<int32_t>(m_edicts[edictIdx].v.size())) {
+            return m_edicts[edictIdx].v[offset].f;
+        }
+    }
+    return 0.0f;
 }
 
 glm::vec3 VirtualMachine::GetEdictFieldVector(int32_t edictIdx, int32_t offset) const {
-    return glm::vec3(m_edicts[edictIdx].v[offset].f, 
-                     m_edicts[edictIdx].v[offset + 1].f, 
-                     m_edicts[edictIdx].v[offset + 2].f);
+    if (edictIdx >= 0 && edictIdx < static_cast<int32_t>(m_edicts.size())) {
+        if (offset >= 0 && offset + 2 < static_cast<int32_t>(m_edicts[edictIdx].v.size())) {
+            return glm::vec3(m_edicts[edictIdx].v[offset].f, 
+                             m_edicts[edictIdx].v[offset + 1].f, 
+                             m_edicts[edictIdx].v[offset + 2].f);
+        }
+    }
+    return glm::vec3(0.0f);
 }
 
 void VirtualMachine::SetEdictFieldFromString(int32_t edictIdx, const std::string& name, const std::string& value) {
