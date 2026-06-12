@@ -6,6 +6,11 @@
 
 namespace engine {
 
+struct StackFrame {
+    int32_t functionIndex;
+    int32_t returnPC;      // The Program Counter to jump back to
+};
+
 // An Entity in QuakeC memory
 struct Edict {
     bool isFree = true;
@@ -26,6 +31,21 @@ public:
     float GetGlobalFloat(int32_t offset) const;
     void  SetGlobalFloat(int32_t offset, float value);
 
+    // Finds the index of a function by its string name
+    int32_t FindFunction(const std::string& name) const;
+
+    // The Virtual CPU! Executes bytecode starting at the given function index
+    void Execute(int32_t funcIndex);
+    
+    // Helper to execute by name
+    void Execute(const std::string& name) {
+        int32_t idx = FindFunction(name);
+        if (idx != -1) Execute(idx);
+    }
+
+    // Helper to read strings out of QuakeC memory
+    std::string GetProgsString(int32_t stringOffset) const;
+
 private:
     std::vector<std::byte> m_rawData;
     const qc::dprograms_t* m_header;
@@ -39,6 +59,7 @@ private:
     // ---> NEW: Writable Memory
     std::vector<qc::eval_t> m_globalData; // The VM's Global RAM
     std::vector<Edict>      m_edicts;     // The VM's Entity RAM
+    std::vector<StackFrame> m_callStack; // <--- NEW: The CPU Call Stack!
 };
 
 } // namespace engine

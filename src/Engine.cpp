@@ -139,6 +139,10 @@ void Engine::Init() {
             float readBack = m_vm->GetGlobalFloat(timeOffset);
             std::cout << "Wrote 123.45 to 'time', read back: " << readBack << "\n";
         }
+
+        // ---> UPDATED: Execute the actual map setup function!
+        std::cout << "\nAttempting to execute QuakeC 'worldspawn'...\n";
+        m_vm->Execute("worldspawn");
     } else {
         std::cerr << "CRITICAL ERROR: Could not find progs.dat!\n";
     }
