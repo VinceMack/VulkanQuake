@@ -73,6 +73,7 @@ public:
     int32_t GetGlobalEdict(int32_t offset) const;
     float GetEdictFieldFloat(int32_t edictIdx, int32_t offset) const;
     glm::vec3 GetEdictFieldVector(int32_t edictIdx, int32_t offset) const;
+    int32_t GetEdictFieldFunction(int32_t edictIdx, int32_t offset) const;
     const std::vector<Edict>& GetEdicts() const { return m_edicts; }
 
     // QuakeC Parameter API (Parms start at offset 4, spaced by 3)

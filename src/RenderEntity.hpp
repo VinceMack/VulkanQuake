@@ -13,6 +13,7 @@ enum class BrushState { Static, Closed, Opening, Open, Closing };
 struct RenderEntity {
     uint32_t modelId;
     EntityModelType type;
+    int32_t edictIndex = -1; // Links this visual entity to its VM brain
     glm::vec3 origin;
     glm::vec3 angles;
     uint32_t frame;

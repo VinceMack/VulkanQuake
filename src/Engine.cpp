@@ -314,15 +314,23 @@ bool Engine::LoadMap(const std::string& mapName) {
         int32_t ofs_mins = m_vm->FindFieldOffset("mins");
         int32_t ofs_maxs = m_vm->FindFieldOffset("maxs");
         int32_t ofs_flags = m_vm->FindFieldOffset("flags");
+        int32_t ofs_absmin = m_vm->FindFieldOffset("absmin");
+        int32_t ofs_absmax = m_vm->FindFieldOffset("absmax");
 
         // 2. Attach the C++ Router to the VM
-        m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags](VirtualMachine& vm, int32_t bIdx) {
+        m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags, ofs_absmin, ofs_absmax](VirtualMachine& vm, int32_t bIdx) {
             switch (bIdx) {
                 case 2: { // setorigin(entity e, vector v)
                     int32_t targetEnt = vm.GetParmEdict(0);
                     glm::vec3 v = vm.GetParmVector(1);
                     if (targetEnt >= 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
                         vm.SetEdictFieldVector(targetEnt, ofs_origin, v);
+                        if (ofs_absmin != -1 && ofs_absmax != -1) {
+                            glm::vec3 mins = vm.GetEdictFieldVector(targetEnt, ofs_mins);
+                            glm::vec3 maxs = vm.GetEdictFieldVector(targetEnt, ofs_maxs);
+                            vm.SetEdictFieldVector(targetEnt, ofs_absmin, v + mins);
+                            vm.SetEdictFieldVector(targetEnt, ofs_absmax, v + maxs);
+                        }
                     }
                     break;
                 }
@@ -341,14 +349,43 @@ bool Engine::LoadMap(const std::string& mapName) {
                             int32_t strOffset = vm.m_globalData[7].string; // Parm 1 string offset
                             vm.m_edicts[targetEnt].v[ofs_model].string = strOffset;
                         }
+
+                        // If it is a BSP brush model, set sizes automatically!
+                        if (!modelName.empty() && modelName[0] == '*') {
+                            try {
+                                int32_t modelId = std::stoi(modelName.substr(1));
+                                const auto& bspModel = m_map->GetBspModel(modelId);
+                                
+                                glm::vec3 mins(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
+                                glm::vec3 maxs(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
+                                
+                                vm.SetEdictFieldVector(targetEnt, ofs_mins, mins);
+                                vm.SetEdictFieldVector(targetEnt, ofs_maxs, maxs);
+                                
+                                if (ofs_absmin != -1 && ofs_absmax != -1) {
+                                    glm::vec3 origin = vm.GetEdictFieldVector(targetEnt, ofs_origin);
+                                    vm.SetEdictFieldVector(targetEnt, ofs_absmin, origin + mins);
+                                    vm.SetEdictFieldVector(targetEnt, ofs_absmax, origin + maxs);
+                                }
+                            } catch (...) {
+                                // ignore parse/indexing errors
+                            }
+                        }
                     }
                     break;
                 }
                 case 4: { // setsize(entity e, vector min, vector max)
                     int32_t targetEnt = vm.GetParmEdict(0);
                     if (targetEnt >= 0 && targetEnt < static_cast<int32_t>(vm.m_edicts.size())) {
-                        vm.SetEdictFieldVector(targetEnt, ofs_mins, vm.GetParmVector(1));
-                        vm.SetEdictFieldVector(targetEnt, ofs_maxs, vm.GetParmVector(2));
+                        glm::vec3 mins = vm.GetParmVector(1);
+                        glm::vec3 maxs = vm.GetParmVector(2);
+                        vm.SetEdictFieldVector(targetEnt, ofs_mins, mins);
+                        vm.SetEdictFieldVector(targetEnt, ofs_maxs, maxs);
+                        if (ofs_absmin != -1 && ofs_absmax != -1) {
+                            glm::vec3 origin = vm.GetEdictFieldVector(targetEnt, ofs_origin);
+                            vm.SetEdictFieldVector(targetEnt, ofs_absmin, origin + mins);
+                            vm.SetEdictFieldVector(targetEnt, ofs_absmax, origin + maxs);
+                        }
                     }
                     break;
                 }
@@ -374,7 +411,7 @@ bool Engine::LoadMap(const std::string& mapName) {
                     }
                     break;
                 }
-                case 39: { // droptofloor()
+                case 34: { // droptofloor()
                     // Traces down 256 units from `self.origin`.
                     int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
                     if (selfIdx >= 0 && selfIdx < static_cast<int32_t>(vm.m_edicts.size())) {
@@ -423,7 +460,7 @@ bool Engine::LoadMap(const std::string& mapName) {
                     vm.SetReturnFloat(std::abs(vm.GetParmFloat(0)));
                     break;
                 }
-                case 51: { // makestatic(entity e)
+                case 69: { // makestatic(entity e)
                     // QuakeC pushes an entity to the static list, we ignore for now
                     break;
                 }
@@ -439,8 +476,46 @@ bool Engine::LoadMap(const std::string& mapName) {
                     vm.SetReturnFloat(static_cast<float>(rand()) / static_cast<float>(RAND_MAX));
                     break;
                 }
-                case 34: { // sound(entity e, float chan, string samp, float vol, float attn)
+                case 8: { // sound(entity e, float chan, string samp, float vol, float attn)
                     // Stub for sound playing
+                    break;
+                }
+                case 17: { // checkclient()
+                    // Returns the player entity (index 1)
+                    vm.SetReturnEdict(1);
+                    break;
+                }
+                case 18: { // find(entity start, .string field, string match)
+                    int32_t startIdx = vm.GetParmEdict(0);
+                    int32_t fieldOffset = vm.GetParmEdict(1);
+                    std::string matchStr = vm.GetParmString(2);
+                    
+                    int32_t foundIdx = 0; // default to world/not found
+                    
+                    if (fieldOffset >= 0) {
+                        const auto& edicts = vm.GetEdicts();
+                        for (size_t i = startIdx + 1; i < edicts.size(); ++i) {
+                            if (edicts[i].isFree) continue;
+                            
+                            if (fieldOffset < static_cast<int32_t>(edicts[i].v.size())) {
+                                int32_t stringOffset = edicts[i].v[fieldOffset].string;
+                                std::string val = vm.GetProgsString(stringOffset);
+                                if (val == matchStr) {
+                                    foundIdx = static_cast<int32_t>(i);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    vm.SetReturnEdict(foundIdx);
+                    break;
+                }
+                case 32: { // walkmove(float yaw, float dist)
+                    vm.SetReturnFloat(1.0f);
+                    break;
+                }
+                case 67: { // movetogoal(float dist)
+                    vm.SetReturnFloat(1.0f);
                     break;
                 }
                 default: {
@@ -454,10 +529,19 @@ bool Engine::LoadMap(const std::string& mapName) {
         m_console->Print("Executing worldspawn...");
         m_vm->Execute("worldspawn");
 
+        // Cache offsets for the Think Loop!
+        m_ofs_time = m_vm->FindGlobalOffset("time");
+        m_ofs_self = m_vm->FindGlobalOffset("self");
+        m_ofs_nextthink = m_vm->FindFieldOffset("nextthink");
+        m_ofs_think = m_vm->FindFieldOffset("think");
+        m_ofs_origin = m_vm->FindFieldOffset("origin");
+        m_ofs_angles = m_vm->FindFieldOffset("angles");
+        m_ofs_frame = m_vm->FindFieldOffset("frame");
+
         // Cache necessary VM offsets for speed
-        int32_t globalSelfOffset = m_vm->FindGlobalOffset("self");
-        int32_t fieldOriginOffset = m_vm->FindFieldOffset("origin");
-        int32_t fieldAngleOffset = m_vm->FindFieldOffset("angle");
+        int32_t globalSelfOffset = m_ofs_self;
+        int32_t fieldOriginOffset = m_ofs_origin;
+        int32_t fieldAnglesOffset = m_vm->FindFieldOffset("angles");
 
         m_console->Print("VM Spawning Entities...");
 
@@ -473,7 +557,9 @@ bool Engine::LoadMap(const std::string& mapName) {
 
             // Set explicit fields
             m_vm->SetEdictFieldVector(edictIdx, fieldOriginOffset, ent.GetVector("origin"));
-            m_vm->SetEdictFieldFloat(edictIdx, fieldAngleOffset, ent.GetFloat("angle"));
+            if (fieldAnglesOffset != -1) {
+                m_vm->SetEdictFieldFloat(edictIdx, fieldAnglesOffset + 1, ent.GetFloat("angle"));
+            }
             
             // Pass spawnflags into QuakeC so it knows if a door is START_OPEN!
             int32_t ofs_spawnflags = m_vm->FindFieldOffset("spawnflags");
@@ -513,8 +599,9 @@ bool Engine::LoadMap(const std::string& mapName) {
                 if (modelName.empty()) continue;
 
                 RenderEntity rent;
+                rent.edictIndex = static_cast<int32_t>(edictIdx);
                 rent.origin = m_vm->GetEdictFieldVector(static_cast<int32_t>(edictIdx), fieldOriginOffset);
-                rent.angles = glm::vec3(0.0f, m_vm->GetEdictFieldFloat(static_cast<int32_t>(edictIdx), fieldAngleOffset), 0.0f);
+                rent.angles = m_vm->GetEdictFieldVector(static_cast<int32_t>(edictIdx), m_ofs_angles);
                 rent.frame = static_cast<uint32_t>(m_vm->GetEdictFieldFloat(static_cast<int32_t>(edictIdx), ofs_frame));
                 rent.nextFrame = rent.frame + 1;
                 rent.interp = static_cast<float>(rand() % 100) / 100.0f;
@@ -611,10 +698,58 @@ void Engine::MainLoop() {
         }
 
         // ========================================================================
-        // Entity Simulation (The Game Tick)
+        // ---> NEW: The QuakeC Think Loop
         // ========================================================================
-        float animationSpeed = 10.0f; 
-        
+        if (m_vm) {
+            // 1. Advance QuakeC Time
+            float currentQCTime = m_vm->GetGlobalFloat(m_ofs_time) + deltaTime;
+            m_vm->SetGlobalFloat(m_ofs_time, currentQCTime);
+
+            // 2. Execute Entity Thinks
+            const auto& edicts = m_vm->GetEdicts();
+            for (size_t i = 1; i < edicts.size(); ++i) {
+                if (edicts[i].isFree) continue;
+
+                float nextthink = m_vm->GetEdictFieldFloat(static_cast<int32_t>(i), m_ofs_nextthink);
+                
+                // If the entity is scheduled to think, and time has passed...
+                if (nextthink > 0.0f && currentQCTime >= nextthink) {
+                    
+                    // Clear nextthink (the QC script will reset it if it wants to loop)
+                    m_vm->SetEdictFieldFloat(static_cast<int32_t>(i), m_ofs_nextthink, 0.0f);
+                    
+                    // Tell the VM which entity is currently acting
+                    m_vm->SetGlobalEdict(m_ofs_self, static_cast<int32_t>(i));
+
+                    // Execute the function pointer!
+                    int32_t thinkFunc = m_vm->GetEdictFieldFunction(static_cast<int32_t>(i), m_ofs_think);
+                    if (thinkFunc > 0) {
+                        m_vm->Execute(thinkFunc);
+                    }
+                }
+            }
+
+            // 3. Sync VM RAM back to our C++ RenderEntities!
+            for (auto& rent : m_renderEntities) {
+                if (rent.edictIndex > 0) {
+                    rent.origin = m_vm->GetEdictFieldVector(rent.edictIndex, m_ofs_origin);
+                    rent.angles = m_vm->GetEdictFieldVector(rent.edictIndex, m_ofs_angles);
+                    
+                    uint32_t vmFrame = static_cast<uint32_t>(m_vm->GetEdictFieldFloat(rent.edictIndex, m_ofs_frame));
+                    
+                    // If QuakeC changed the frame, update our interpolation logic
+                    if (rent.frame != vmFrame) {
+                        rent.frame = vmFrame;
+                        rent.nextFrame = vmFrame; 
+                        rent.interp = 0.0f;
+                    }
+                }
+            }
+        }
+
+        // ========================================================================
+        // Entity Simulation (The Game Tick - Brush Kinematics)
+        // ========================================================================
         glm::vec3 pTouchMins = m_player->GetPosition() + glm::vec3(-48.0f, -48.0f, -10.0f);
         glm::vec3 pTouchMaxs = m_player->GetPosition() + glm::vec3(48.0f, 48.0f, 66.0f);
 
@@ -623,18 +758,8 @@ void Engine::MainLoop() {
         std::vector<std::string> firedEvents;
 
         for (auto& rent : m_renderEntities) {
-            if (rent.type == EntityModelType::Alias) {
-                rent.interp += animationSpeed * deltaTime;
-                if (rent.interp >= 1.0f) {
-                    rent.interp -= 1.0f;
-                    rent.frame = rent.nextFrame;
-                    rent.nextFrame = rent.frame + 1;
-                }
-            } 
-            else if (rent.type == EntityModelType::BspBrush) {
-                
+            if (rent.type == EntityModelType::BspBrush) {
                 // 1. Proximity Trigger check
-                // ---> NEW: We ONLY allow touch triggers if the entity doesn't have a targetname!
                 if (rent.brushState == BrushState::Closed && !rent.requireTrigger) {
                     glm::vec3 dMins = rent.GetAbsMins();
                     glm::vec3 dMaxs = rent.GetAbsMaxs();
@@ -645,7 +770,7 @@ void Engine::MainLoop() {
                         
                         rent.brushState = BrushState::Opening; 
                         
-                        // ---> NEW: If this was a button, fire its target!
+                        // If this was a button, fire its target!
                         if (!rent.target.empty()) {
                             firedEvents.push_back(rent.target);
                         }

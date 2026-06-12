@@ -51,6 +51,15 @@ private:
     std::unique_ptr<engine::vfs::VirtualFileSystem> m_vfs;
     std::unique_ptr<VirtualMachine> m_vm;
     
+    // VM Memory Offsets cached for speed
+    int32_t m_ofs_time = -1;
+    int32_t m_ofs_self = -1;
+    int32_t m_ofs_nextthink = -1;
+    int32_t m_ofs_think = -1;
+    int32_t m_ofs_origin = -1;
+    int32_t m_ofs_angles = -1;
+    int32_t m_ofs_frame = -1;
+
     std::string m_lightstyles[64]; // <--- NEW: Dynamic lightstyle animations
     
     bool m_showTriggers = false; // <--- NEW

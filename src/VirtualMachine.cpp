@@ -577,6 +577,12 @@ glm::vec3 VirtualMachine::GetEdictFieldVector(int32_t edictIdx, int32_t offset) 
     return glm::vec3(0.0f);
 }
 
+int32_t VirtualMachine::GetEdictFieldFunction(int32_t edictIdx, int32_t offset) const {
+    if (edictIdx < 0 || edictIdx >= static_cast<int32_t>(m_edicts.size())) return 0;
+    if (offset < 0 || offset >= static_cast<int32_t>(m_edicts[edictIdx].v.size())) return 0;
+    return m_edicts[edictIdx].v[offset].function;
+}
+
 void VirtualMachine::SetEdictFieldFromString(int32_t edictIdx, const std::string& name, const std::string& value) {
     if (edictIdx < 0 || edictIdx >= static_cast<int32_t>(m_edicts.size())) return;
 
