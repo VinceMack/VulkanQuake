@@ -44,6 +44,9 @@ public:
     // Safely tears down map-specific Vulkan resources
     void UnloadMap(); 
 
+    // ---> NEW: Debug tool to render invisible entities
+    void SetShowTriggers(bool show) { m_showTriggers = show; } 
+
 private:
     void InitVulkan();
     void InitSwapchain();
@@ -137,6 +140,7 @@ private:
     VkShaderModule m_uiFragShader = VK_NULL_HANDLE;
     
     std::vector<GpuAliasModel> m_gpuAliasModels; // Stores our uploaded models
+    bool m_showTriggers = false; // <--- NEW
 };
 
 } // namespace engine

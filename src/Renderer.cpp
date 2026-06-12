@@ -466,8 +466,8 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         if (rent.type != EntityModelType::BspBrush) continue;
         if (rent.modelId == 0) continue; // Model 0 was already drawn by the PVS pass!
 
-        // ---> NEW: Don't draw invisible entities (like triggers)
-        if (!rent.isVisible) continue;
+        // ---> UPDATED: Don't draw invisible entities, UNLESS the developer override is ON
+        if (!rent.isVisible && !m_showTriggers) continue;
 
         const SubModel& subModel = map.GetSubModel(rent.modelId);
         

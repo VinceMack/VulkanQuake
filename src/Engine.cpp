@@ -130,6 +130,18 @@ void Engine::Init() {
         m_console->Clear();
     });
 
+    // ---> NEW: Triggers Command
+    m_console->RegisterCommand("triggers", [this](const std::vector<std::string>& args) {
+        m_showTriggers = !m_showTriggers;
+        
+        // Pass the state to the Renderer
+        if (m_renderer) {
+            m_renderer->SetShowTriggers(m_showTriggers);
+        }
+        
+        m_console->Print(m_showTriggers ? "Trigger Visualization: ON" : "Trigger Visibility: OFF");
+    });
+
     // 4. Load UI Font and View Model
     auto paletteData = m_vfs->ReadFile("gfx/palette.lmp");
     
