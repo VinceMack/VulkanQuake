@@ -207,6 +207,29 @@ void Player::StepSlideMove(float deltaTime) {
 void Player::TickPhysics(const UserCmd& cmd, const std::vector<RenderEntity>& entities) {
     m_currentEntities = &entities; // <--- Store temporarily for the duration of this tick
 
+    // ---> NEW: Noclip Flight Logic
+    if (m_noclip) {
+        // Calculate a 3D forward vector using both Yaw AND Pitch
+        glm::vec3 forwardDir;
+        forwardDir.x = std::cos(glm::radians(cmd.yaw)) * std::cos(glm::radians(cmd.pitch));
+        forwardDir.y = std::sin(glm::radians(cmd.yaw)) * std::cos(glm::radians(cmd.pitch));
+        forwardDir.z = std::sin(glm::radians(cmd.pitch));
+
+        glm::vec3 rightDir = glm::normalize(glm::cross(forwardDir, glm::vec3(0.0f, 0.0f, 1.0f)));
+
+        // Combine inputs for 3D flight velocity
+        glm::vec3 wishvel = forwardDir * cmd.forwardmove + rightDir * cmd.sidemove;
+        
+        // Move the player directly, ignoring collision completely
+        m_position += wishvel * cmd.msec;
+        
+        // Update the camera and bail out early
+        m_camera->SetPosition(m_position + glm::vec3(0.0f, 0.0f, 22.0f));
+        m_currentEntities = nullptr;
+        return;
+    }
+    // <--- END NEW
+
     CheckStuck();
     
     if (!m_onGround) {

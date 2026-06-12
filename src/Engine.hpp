@@ -38,6 +38,7 @@ private:
     
     std::vector<RenderEntity> m_renderEntities;
     std::unordered_map<std::string, uint32_t> m_modelCache;
+    RenderEntity m_viewModel;
     
     bool m_isRunning = false;
 };

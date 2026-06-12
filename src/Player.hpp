@@ -28,6 +28,9 @@ public:
 
     glm::vec3 GetPosition() const { return m_position; }
 
+    void ToggleNoclip() { m_noclip = !m_noclip; }
+    bool IsNoclip() const { return m_noclip; }
+
 private:
     void CheckStuck();
     void ClipVelocity(const glm::vec3& in, const glm::vec3& normal, glm::vec3& out, float overbounce);
@@ -61,6 +64,8 @@ private:
     bool m_onGround = false;
 
     const std::vector<RenderEntity>* m_currentEntities = nullptr;
+
+    bool m_noclip = false;
 };
 
 } // namespace engine

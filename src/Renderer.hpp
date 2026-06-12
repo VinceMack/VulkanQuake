@@ -32,7 +32,7 @@ public:
     uint32_t UploadAliasModel(const AliasModel& model);
     
     // The main Render Loop execution
-    void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities);
+    void DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, const RenderEntity* viewModel = nullptr);
 
 private:
     void InitVulkan();

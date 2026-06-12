@@ -347,7 +347,7 @@ uint32_t Renderer::UploadAliasModel(const AliasModel& model) {
     return static_cast<uint32_t>(m_gpuAliasModels.size() - 1);
 }
 
-void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities) {
+void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector<RenderEntity>& renderEntities, const RenderEntity* viewModel) {
     vkWaitForFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame], VK_TRUE, UINT64_MAX);
     vkResetFences(m_vkbDevice.device, 1, &m_inFlightFences[m_currentFrame]);
 
@@ -462,6 +462,48 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &gpuModel.descriptorSet, 0, nullptr);
         vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
     }
+
+    // ---> NEW: View Model Pass
+    if (viewModel && viewModel->modelId < m_gpuAliasModels.size()) {
+        // 1. Clear the Depth Buffer so the gun never clips into walls!
+        VkClearAttachment clearDepth{};
+        clearDepth.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        clearDepth.clearValue.depthStencil = {1.0f, 0};
+        
+        VkClearRect clearRect{};
+        clearRect.rect.offset = {0, 0};
+        clearRect.rect.extent = m_swapchainExtent;
+        clearRect.baseArrayLayer = 0;
+        clearRect.layerCount = 1;
+        
+        vkCmdClearAttachments(cmd, 1, &clearDepth, 1, &clearRect);
+
+        // 2. Bind the View Model Pipeline
+        const auto& gpuModel = m_gpuAliasModels[viewModel->modelId];
+        VkBuffer vBuffers[] = { gpuModel.vertexBuffer.buffer, gpuModel.vertexBuffer.buffer };
+        
+        uint32_t frameA = viewModel->frame % gpuModel.numFrames;
+        uint32_t frameB = viewModel->nextFrame % gpuModel.numFrames;
+        VkDeviceSize vOffsets[] = { 
+            frameA * gpuModel.verticesPerFrame * sizeof(engine::ModelVertex),
+            frameB * gpuModel.verticesPerFrame * sizeof(engine::ModelVertex)
+        };
+        
+        vkCmdBindVertexBuffers(cmd, 0, 2, vBuffers, vOffsets);
+        vkCmdBindIndexBuffer(cmd, gpuModel.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+        // 3. The Math Hack: We lock the camera at (0,0,0) looking down the X-axis
+        glm::mat4 viewIdent = glm::lookAt(glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        
+        ModelPushConstants pc;
+        pc.renderMatrix = proj * viewIdent * viewModel->GetTransformMatrix();
+        pc.interp = viewModel->interp;
+        
+        vkCmdPushConstants(cmd, m_modelPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ModelPushConstants), &pc);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_modelPipelineLayout, 0, 1, &gpuModel.descriptorSet, 0, nullptr);
+        vkCmdDrawIndexed(cmd, gpuModel.indexCount, 1, 0, 0, 0);
+    }
+    // <--- END NEW
 
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);

@@ -129,7 +129,7 @@ void Engine::Init() {
         // ---> NEW: Dictionary of Quake 1 Classnames to MDL files
         std::unordered_map<std::string, std::string> classnameToMdl = {
             {"monster_army", "progs/soldier.mdl"},
-            {"monster_dog", "progs/h_dog.mdl"},
+            {"monster_dog", "progs/dog.mdl"},
             {"monster_ogre", "progs/ogre.mdl"},
             {"monster_demon1", "progs/demon.mdl"},
             {"monster_shambler", "progs/shambler.mdl"},
@@ -208,6 +208,16 @@ void Engine::Init() {
             std::cerr << "WARNING: No info_player_start found. Spawning at 0,0,0.\n";
         }
 
+        // Load the shotgun view model
+        uint32_t vShotId = LoadAliasModel("progs/v_shot.mdl", vfs, *paletteData);
+        m_viewModel.type = EntityModelType::Alias;
+        m_viewModel.modelId = vShotId;
+        m_viewModel.origin = glm::vec3(0.0f);
+        m_viewModel.angles = glm::vec3(0.0f);
+        m_viewModel.frame = 0;
+        m_viewModel.nextFrame = 0; // Don't animate the gun just yet
+        m_viewModel.interp = 0.0f;
+
     m_isRunning = true;
 }
 
@@ -221,7 +231,7 @@ void Engine::MainLoop() {
 
     while (m_isRunning) {
         // 1. Process Window Events
-        m_window->PollEvents(m_isRunning);
+        m_window->PollEvents(m_isRunning, m_player.get());
 
         // 2. Calculate Delta Time
         uint64_t currentTime = SDL_GetTicks();
@@ -239,6 +249,7 @@ void Engine::MainLoop() {
         UserCmd cmd{};
         cmd.msec = deltaTime;
         cmd.yaw = m_camera->GetYaw();
+        cmd.pitch = m_camera->GetPitch(); // <--- NEW: Crucial for noclip flight!
 
         // Standard movement scales
         // cl_forwardspeed = 200 * cl_movespeedkey(2.0) = 400
@@ -274,7 +285,7 @@ void Engine::MainLoop() {
         }
 
         // 4. Render
-        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities);
+        m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel);
     }
 }
 

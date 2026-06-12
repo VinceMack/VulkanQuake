@@ -25,6 +25,7 @@ public:
 
     glm::vec3 GetPosition() const { return position; }
     float GetYaw() const { return yaw; }
+    float GetPitch() const { return pitch; }
 
 private:
     void UpdateVectors();
