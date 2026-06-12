@@ -67,6 +67,11 @@ void main() {
         brightness = lm.r;
     }
 
-    // Multiply the diffuse texture by our dynamic shadow brightness
-    outColor = diffuseColor * brightness * 1.5;
+    // 1. Quake Overbrighting (Lightmaps can double the brightness of a diffuse texture)
+    vec3 finalColor = diffuseColor.rgb * (brightness * 1.3);
+
+    // 2. Hardware Gamma Correction (hardware hack to crush shadows and restore mood)
+    finalColor = pow(finalColor, vec3(1.0 / 0.6)); 
+
+    outColor = vec4(finalColor, diffuseColor.a);
 }
