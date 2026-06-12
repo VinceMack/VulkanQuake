@@ -345,4 +345,30 @@ void Player::PM_GroundMove(const UserCmd& cmd, float deltaTime) {
     PM_Accelerate(wishdir, wishspeed, sv_accelerate, deltaTime);
 }
 
+std::string Player::CheckTriggers(const std::vector<RenderEntity>& entities) {
+    if (m_noclip) return ""; // Don't trigger levels while flying around in noclip!
+
+    // Quake Player Bounding Box (Relative to m_position, which is at our feet)
+    glm::vec3 playerMins = m_position + glm::vec3(-16.0f, -16.0f, 0.0f);
+    glm::vec3 playerMaxs = m_position + glm::vec3(16.0f, 16.0f, 56.0f);
+
+    for (const auto& ent : entities) {
+        if (!ent.isTrigger) continue;
+
+        // Standard 3D AABB Intersection Test
+        bool overlapX = playerMins.x <= ent.bboxMax.x && playerMaxs.x >= ent.bboxMin.x;
+        bool overlapY = playerMins.y <= ent.bboxMax.y && playerMaxs.y >= ent.bboxMin.y;
+        bool overlapZ = playerMins.z <= ent.bboxMax.z && playerMaxs.z >= ent.bboxMin.z;
+
+        if (overlapX && overlapY && overlapZ) {
+            // We stepped into a trigger!
+            if (!ent.triggerTarget.empty()) {
+                return ent.triggerTarget;
+            }
+        }
+    }
+
+    return "";
+}
+
 } // namespace engine

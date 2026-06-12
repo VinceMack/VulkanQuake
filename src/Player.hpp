@@ -25,6 +25,8 @@ public:
 
     void ProcessMouse(float xoffset, float yoffset);
     void TickPhysics(const UserCmd& cmd, const std::vector<RenderEntity>& entities);
+    // Returns the target map if we hit a trigger_changelevel!
+    std::string CheckTriggers(const std::vector<RenderEntity>& entities);
 
     glm::vec3 GetPosition() const { return m_position; }
 

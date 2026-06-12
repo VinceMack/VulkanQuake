@@ -1,6 +1,7 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -22,6 +23,12 @@ struct RenderEntity {
     // ---> NEW FLAGS
     bool isSolid = true;   
     bool isVisible = true; 
+
+    // ---> NEW: Trigger logic data
+    bool isTrigger = false;
+    std::string triggerTarget; // E.g., "e1m2"
+    glm::vec3 bboxMin;         // The absolute minimum X,Y,Z bounds
+    glm::vec3 bboxMax;         // The absolute maximum X,Y,Z bounds
 
     // Helper to generate the exact Vulkan transformation matrix
     glm::mat4 GetTransformMatrix() const;

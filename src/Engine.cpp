@@ -325,16 +325,28 @@ bool Engine::LoadMap(const std::string& mapName) {
             std::string cls = ent.GetClassname();
             rent.isSolid = true;
             rent.isVisible = true;
+            rent.isTrigger = false;
 
             // If the classname contains "trigger", it's an invisible hit-box
             if (cls.find("trigger_") != std::string::npos) {
                 rent.isSolid = false;
                 rent.isVisible = false;
+                rent.isTrigger = true; // <--- Mark as trigger!
+                
+                // If it's a level transition, grab the destination map
+                if (cls == "trigger_changelevel") {
+                    rent.triggerTarget = ent.GetString("map");
+                }
             } 
             // func_illusionary is a visible wall that you can walk right through
             else if (cls == "func_illusionary") {
                 rent.isSolid = false;
             }
+
+            // ---> NEW: Precompute Absolute Bounding Box for fast overlap checks
+            const auto& bspModel = m_map->GetBspModel(rent.modelId);
+            rent.bboxMin = rent.origin + glm::vec3(bspModel.mins[0], bspModel.mins[1], bspModel.mins[2]);
+            rent.bboxMax = rent.origin + glm::vec3(bspModel.maxs[0], bspModel.maxs[1], bspModel.maxs[2]);
 
             m_renderEntities.push_back(rent);
         }
@@ -412,6 +424,14 @@ void Engine::MainLoop() {
 
         // Player Physics Tick using UserCmd
         m_player->TickPhysics(cmd, m_renderEntities);
+
+        // ---> NEW: Check if the player stepped into a trigger
+        std::string levelTransition = m_player->CheckTriggers(m_renderEntities);
+        if (!levelTransition.empty()) {
+            m_console->Print("Triggered Changelevel: " + levelTransition);
+            LoadMap(levelTransition);
+            continue; // Safely restart the while-loop for the new map!
+        }
 
         // ========================================================================
         // Entity Simulation (The Game Tick)
