@@ -4,6 +4,7 @@
 #include <vector>
 #include <stdexcept>
 #include <fstream>
+#include <iostream>
 
 namespace engine {
 
@@ -15,6 +16,8 @@ public:
         std::ifstream file(filePath, std::ios::ate | std::ios::binary);
         if (!file.is_open()) {
             throw std::runtime_error("Failed to open shader file: " + filePath);
+        } else {
+            std::cout << "Loading Shader: " << filePath << "\n";
         }
 
         // Get file size and allocate a buffer
