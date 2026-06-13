@@ -2,7 +2,7 @@
 
 This project was built and tested with the following dependencies:
 
-* **[Vulkan SDK](https://vulkan.lunarg.com/sdk/home)**
+* **[Vulkan SDK with GLM & Vulkan Memory Allocator Headers](https://vulkan.lunarg.com/sdk/home)**
 
 * **[CMake 4.3](https://cmake.org/download/)**
 
