@@ -161,11 +161,26 @@ void VirtualMachine::Execute(int32_t funcIndex) {
             switch (st.op) {
                 case qc::OP_RETURN:
                 case qc::OP_DONE:
+                    // Copy return value (3 words) from st.a to OFS_RETURN (1, 2, 3)
+                    if (st.a >= 0 && st.a + 2 < static_cast<int32_t>(m_globalData.size())) {
+                        m_globalData[1].i = m_globalData[st.a].i;
+                        m_globalData[2].i = m_globalData[st.a + 1].i;
+                        m_globalData[3].i = m_globalData[st.a + 2].i;
+                    }
+
                     // ---> NEW: Stack Popping!
                     if (m_callStack.empty()) {
                         std::cout << "=== VM Execution Finished ===\n";
                         return; // The root function finished!
                     } else {
+                        // Restore the callee's original local variable states
+                        const auto& calleeFunc = m_functions[m_callStack.back().functionIndex];
+                        for (int i = 0; i < calleeFunc.locals; ++i) {
+                            if (calleeFunc.parm_start + i < static_cast<int32_t>(m_globalData.size())) {
+                                m_globalData[calleeFunc.parm_start + i] = m_callStack.back().savedLocals[i];
+                            }
+                        }
+
                         // We finished a sub-function. Jump back to where we were!
                         pc = m_callStack.back().returnPC;
                         m_callStack.pop_back();
@@ -176,6 +191,7 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                 case qc::OP_STORE_ENT:
                 case qc::OP_STORE_S:
                 case qc::OP_STORE_FNC:
+                case qc::OP_STORE_FLD:
                     // STORE operations simply copy 32-bits from address A to address B
                     m_globalData[st.b].i = m_globalData[st.a].i;
                     break;
@@ -481,6 +497,14 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                         // =======================================================
                         // ---> NEW: Stack Pushing for Sub-Functions
                         // =======================================================
+                        // Save off the locals/parameters of the callee to prevent corruption
+                        std::vector<qc::eval_t> savedLocals(newFunc.locals);
+                        for (int i = 0; i < newFunc.locals; ++i) {
+                            if (newFunc.parm_start + i < static_cast<int32_t>(m_globalData.size())) {
+                                savedLocals[i] = m_globalData[newFunc.parm_start + i];
+                            }
+                        }
+
                         // Copy parameters from global OFS_PARM to the function's local variables!
                         int numArgs = st.op - qc::OP_CALL0;
                         int currentParmOffset = 0;
@@ -492,7 +516,7 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                             currentParmOffset += size;
                         }
 
-                        m_callStack.push_back({destFunc, pc}); // Save where we are
+                        m_callStack.push_back({destFunc, pc, std::move(savedLocals)}); // Save where we are
                         pc = newFunc.first_statement;          // Jump to the new function!
                     }
                     break;

@@ -11,6 +11,7 @@ namespace engine {
 struct StackFrame {
     int32_t functionIndex;
     int32_t returnPC;      // The Program Counter to jump back to
+    std::vector<qc::eval_t> savedLocals;
 };
 
 // Callback for Built-in C++ functions
