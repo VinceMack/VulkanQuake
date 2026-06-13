@@ -38,6 +38,8 @@ private:
     std::unique_ptr<Window> m_window;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<Camera> m_camera;
+
+    bool StepDirection(int32_t edictIdx, float yaw, float dist);
     std::unique_ptr<Map> m_map;
     std::unique_ptr<Physics> m_physics;
     std::unique_ptr<Player> m_player;

@@ -481,6 +481,17 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                         // =======================================================
                         // ---> NEW: Stack Pushing for Sub-Functions
                         // =======================================================
+                        // Copy parameters from global OFS_PARM to the function's local variables!
+                        int numArgs = st.op - qc::OP_CALL0;
+                        int currentParmOffset = 0;
+                        for (int i = 0; i < numArgs; ++i) {
+                            int size = newFunc.parm_size[i];
+                            for (int j = 0; j < size; ++j) {
+                                m_globalData[newFunc.parm_start + currentParmOffset + j].i = m_globalData[4 + i * 3 + j].i;
+                            }
+                            currentParmOffset += size;
+                        }
+
                         m_callStack.push_back({destFunc, pc}); // Save where we are
                         pc = newFunc.first_statement;          // Jump to the new function!
                     }

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <SDL3/SDL.h>
 
 // Helper functions for locating data
@@ -356,12 +357,56 @@ bool Engine::LoadMap(const std::string& mapName) {
         int32_t ofs_trace_plane_dist = m_vm->FindGlobalOffset("trace_plane_dist");
         int32_t ofs_trace_ent = m_vm->FindGlobalOffset("trace_ent");
 
+        // Cache makevectors outputs for Built-in #1
+        int32_t ofs_v_forward = m_vm->FindGlobalOffset("v_forward");
+        int32_t ofs_v_up = m_vm->FindGlobalOffset("v_up");
+        int32_t ofs_v_right = m_vm->FindGlobalOffset("v_right");
+
         // 2. Attach the C++ Router to the VM
         m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags, ofs_absmin, ofs_absmax,
                                  ofs_trace_allsolid, ofs_trace_startsolid, ofs_trace_fraction, 
-                                 ofs_trace_endpos, ofs_trace_plane_normal, ofs_trace_plane_dist, ofs_trace_ent]
+                                 ofs_trace_endpos, ofs_trace_plane_normal, ofs_trace_plane_dist, ofs_trace_ent,
+                                 ofs_v_forward, ofs_v_up, ofs_v_right]
                                 (VirtualMachine& vm, int32_t bIdx) {
             switch (bIdx) {
+                case 1: { // makevectors(vector angles)
+                    // Takes a pitch/yaw/roll angle vector and computes v_forward, v_right, v_up
+                    glm::vec3 angles = vm.GetParmVector(0);
+                    
+                    // Quake uses: pitch = angles[0], yaw = angles[1], roll = angles[2]
+                    // Quake's coordinate system: forward is along +X when yaw=0
+                    float pitch = glm::radians(angles.x);
+                    float yaw   = glm::radians(angles.y);
+                    float roll  = glm::radians(angles.z);
+                    
+                    float cp = std::cos(pitch), sp = std::sin(pitch);
+                    float cy = std::cos(yaw),   sy = std::sin(yaw);
+                    float cr = std::cos(roll),   sr = std::sin(roll);
+                    
+                    // Quake's AngleVectors:
+                    glm::vec3 forward(
+                        cp * cy,
+                        cp * sy,
+                        -sp
+                    );
+                    glm::vec3 right(
+                        (-sr * sp * cy + cr * sy),
+                        (-sr * sp * sy - cr * cy),
+                        (-sr * cp)
+                    );
+                    // Negate right to match Quake convention
+                    right = -right;
+                    glm::vec3 up(
+                        (cr * sp * cy + sr * sy),
+                        (cr * sp * sy - sr * cy),
+                        (cr * cp)
+                    );
+                    
+                    if (ofs_v_forward != -1) vm.SetGlobalVector(ofs_v_forward, forward);
+                    if (ofs_v_right != -1)   vm.SetGlobalVector(ofs_v_right, right);
+                    if (ofs_v_up != -1)      vm.SetGlobalVector(ofs_v_up, up);
+                    break;
+                }
                 case 2: { // setorigin(entity e, vector v)
                     int32_t targetEnt = vm.GetParmEdict(0);
                     glm::vec3 v = vm.GetParmVector(1);
@@ -466,8 +511,10 @@ bool Engine::LoadMap(const std::string& mapName) {
                         if (trace.allSolid || trace.fraction == 1.0f) {
                             vm.SetReturnFloat(0.0f); // Failed to find floor
                         } else {
-                            // Success! Update origin, set ONGROUND flag, return 1
-                            vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
+                            // Success! Update origin (lift by 1 unit to prevent floor snagging), set ONGROUND flag, return 1
+                            glm::vec3 safeOrigin = trace.endPos;
+                            safeOrigin.z += 1.0f;
+                            vm.SetEdictFieldVector(selfIdx, ofs_origin, safeOrigin);
                             
                             // Bitwise OR the FL_ONGROUND flag (512)
                             int32_t flags = static_cast<int32_t>(vm.GetEdictFieldFloat(selfIdx, ofs_flags));
@@ -570,91 +617,82 @@ bool Engine::LoadMap(const std::string& mapName) {
                 case 32: { // walkmove(float yaw, float dist)
                     float yaw = vm.GetParmFloat(0);
                     float dist = vm.GetParmFloat(1);
-
                     int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
-                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
 
-                    // If distance is 0, they are just testing if they are stuck.
-                    // Since droptofloor succeeded earlier, we assume they are safe.
                     if (dist == 0.0f) {
                         vm.SetReturnFloat(1.0f); // True! Not stuck!
                         break;
                     }
 
-                    // Calculate the forward direction based on the Yaw
-                    float angleRad = glm::radians(yaw);
-                    glm::vec3 forwardDir(std::cos(angleRad), std::sin(angleRad), 0.0f);
-                    glm::vec3 end = origin + (forwardDir * dist);
-
-                    // Trace Hull 1 (Bounding Box) to see if the monster hit a wall
-                    // Note: Quake technically uses Hulls 2 and 3 for monsters, but Hull 1 works perfectly for now.
-                    TraceResult trace = m_physics->TraceHull(origin, end, 1, m_renderEntities);
-
-                    if (trace.fraction == 1.0f && !trace.startSolid) {
-                        // The path is clear! Move the monster.
-                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
-                        vm.SetReturnFloat(1.0f); // True (Move successful)
-                    } else {
-                        // Hit a wall!
-                        vm.SetReturnFloat(0.0f); // False (Move blocked)
-                    }
+                    bool success = StepDirection(selfIdx, yaw, dist);
+                    vm.SetReturnFloat(success ? 1.0f : 0.0f);
                     break;
                 }
                 case 67: { // movetogoal(float step)
-                    float stepDist = vm.GetParmFloat(0);
                     int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
+                    float stepDist = vm.GetParmFloat(0);
                     
-                    // 1. Find who we are trying to kill
                     int32_t ofs_enemy = vm.FindFieldOffset("enemy");
                     int32_t enemyIdx = 0;
                     if (ofs_enemy != -1) {
                         enemyIdx = vm.m_edicts[selfIdx].v[ofs_enemy].edict;
                     }
 
-                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
-                    glm::vec3 forwardDir(0.0f);
-                    
-                    // 2. If we have an enemy, calculate the direction to them
-                    if (enemyIdx > 0 && enemyIdx < static_cast<int32_t>(vm.m_edicts.size())) {
-                        glm::vec3 enemyOrigin = vm.GetEdictFieldVector(enemyIdx, ofs_origin);
-                        glm::vec3 dir = enemyOrigin - origin;
-                        dir.z = 0.0f; // Keep movement strictly horizontal
+                    int32_t ofs_origin = vm.FindFieldOffset("origin");
+                    if (ofs_origin != -1 && ofs_origin + 2 < static_cast<int32_t>(vm.m_edicts[selfIdx].v.size())) {
+
+                        glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
+                        float yaw = 0.0f;
                         
-                        if (glm::length(dir) > 0.1f) {
-                            forwardDir = glm::normalize(dir);
+                        if (enemyIdx > 0 && enemyIdx < static_cast<int32_t>(vm.m_edicts.size())) {
+                            glm::vec3 enemyOrigin = vm.GetEdictFieldVector(enemyIdx, ofs_origin);
+                            glm::vec3 dir = enemyOrigin - origin;
+                            dir.z = 0.0f; // Keep movement horizontal
                             
-                            // Instantly snap the monster's rotation to face the player
-                            float yaw = static_cast<float>(std::atan2(forwardDir.y, forwardDir.x) * 180.0f / glm::pi<float>());
-                            if (yaw < 0.0f) yaw += 360.0f;
-                            
+                            if (glm::length(dir) > 0.1f) {
+                                glm::vec3 forwardDir = glm::normalize(dir);
+                                yaw = static_cast<float>(std::atan2(forwardDir.y, forwardDir.x) * 180.0f / glm::pi<float>());
+                                if (yaw < 0.0f) yaw += 360.0f;
+                                
+                                int32_t ofs_angles = vm.FindFieldOffset("angles");
+                                if (ofs_angles != -1) {
+                                    vm.SetEdictFieldVector(selfIdx, ofs_angles, glm::vec3(0.0f, yaw, 0.0f));
+                                }
+                                
+                                int32_t ofs_ideal_yaw = vm.FindFieldOffset("ideal_yaw");
+                                if (ofs_ideal_yaw != -1) {
+                                    vm.SetEdictFieldFloat(selfIdx, ofs_ideal_yaw, yaw);
+                                }
+                            }
+                        } else {
                             int32_t ofs_angles = vm.FindFieldOffset("angles");
                             if (ofs_angles != -1) {
-                                vm.SetEdictFieldVector(selfIdx, ofs_angles, glm::vec3(0.0f, yaw, 0.0f));
+                                yaw = vm.GetEdictFieldVector(selfIdx, ofs_angles).y;
                             }
                         }
-                    } else {
-                        // No enemy? Just walk in the direction we are currently facing
-                        int32_t ofs_angles = vm.FindFieldOffset("angles");
-                        if (ofs_angles != -1) {
-                            glm::vec3 angles = vm.GetEdictFieldVector(selfIdx, ofs_angles);
-                            float angleRad = glm::radians(angles.y);
-                            forwardDir = glm::vec3(std::cos(angleRad), std::sin(angleRad), 0.0f);
-                        }
-                    }
 
-                    // 3. Do the Physics Trace to see if we hit a wall!
-                    glm::vec3 end = origin + (forwardDir * stepDist);
-                    TraceResult trace = m_physics->TraceHull(origin, end, 1, m_renderEntities);
-
-                    if (trace.fraction == 1.0f && !trace.startSolid) {
-                        // The path is clear, physically move the monster!
-                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
-                        vm.SetReturnFloat(1.0f); // True
-                    } else {
-                        // We bumped into a wall. 
-                        // In real Quake, this triggers complex wall-hugging logic. For now, we just stop.
-                        vm.SetReturnFloat(0.0f); // False
+                        std::cout << "[Engine] movetogoal(self:" << selfIdx << ") enemy=" << enemyIdx << " dist=" << stepDist << " yaw=" << yaw << "\n";
+                        StepDirection(selfIdx, yaw, stepDist);
                     }
+                    break;
+                }
+                case 39: { // changeyaw()
+                    int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
+                    int32_t ofs_angles = vm.FindFieldOffset("angles");
+                    int32_t ofs_ideal_yaw = vm.FindFieldOffset("ideal_yaw");
+                    
+                    if (ofs_angles != -1 && ofs_ideal_yaw != -1) {
+                        glm::vec3 angles = vm.GetEdictFieldVector(selfIdx, ofs_angles);
+                        float ideal = vm.GetEdictFieldFloat(selfIdx, ofs_ideal_yaw);
+                        // Instantly snap to ideal yaw
+                        angles.y = ideal; 
+                        vm.SetEdictFieldVector(selfIdx, ofs_angles, angles);
+                    }
+                    break;
+                }
+                case 49: { // checkbottom(entity)
+                    // HACK: Always return 1.0f (True) so monsters don't think they are falling off a cliff!
+                    vm.SetReturnFloat(1.0f);
                     break;
                 }
                 case 9: { // normalize(vector v)
@@ -668,22 +706,14 @@ bool Engine::LoadMap(const std::string& mapName) {
                     vm.SetReturnFloat(glm::length(vm.GetParmVector(0)));
                     break;
                 }
-                case 13: { // vectoangles(vector v)
-                    glm::vec3 v = vm.GetParmVector(0);
-                    float yaw = 0.0f, pitch = 0.0f;
-                    
-                    if (v.y == 0.0f && v.x == 0.0f) {
-                        pitch = (v.z > 0.0f) ? 90.0f : 270.0f;
-                    } else {
-                        yaw = static_cast<float>(std::atan2(v.y, v.x) * 180.0f / glm::pi<float>());
-                        if (yaw < 0.0f) yaw += 360.0f;
-                        
-                        float forward = std::sqrt(v.x * v.x + v.y * v.y);
-                        pitch = static_cast<float>(std::atan2(v.z, forward) * 180.0f / glm::pi<float>());
-                        if (pitch < 0.0f) pitch += 360.0f;
+                case 13: { // vectoyaw(vector v) -> float
+                    glm::vec3 v13 = vm.GetParmVector(0);
+                    float yaw13 = 0.0f;
+                    if (std::abs(v13.x) > 0.001f || std::abs(v13.y) > 0.001f) {
+                        yaw13 = std::atan2(v13.y, v13.x) * 180.0f / glm::pi<float>();
+                        if (yaw13 < 0.0f) yaw13 += 360.0f;
                     }
-                    // Quake returns Pitch (x), Yaw (y), Roll (z)
-                    vm.SetReturnVector(glm::vec3(pitch, yaw, 0.0f));
+                    vm.SetReturnFloat(yaw13);
                     break;
                 }
                 case 27: { // spawn()
@@ -698,7 +728,7 @@ bool Engine::LoadMap(const std::string& mapName) {
                     int32_t forent = vm.GetParmEdict(3); // The entity to ignore (usually 'self')
 
                     // Hull 0 is the 1D Raycast hull!
-                    TraceResult trace = m_physics->TraceHull(v1, v2, 0, m_renderEntities);
+                    TraceResult trace = m_physics->TraceHull(v1, v2, 0, m_renderEntities, forent);
 
                     // Write the results to QuakeC Global memory!
                     vm.SetGlobalFloat(ofs_trace_allsolid, trace.allSolid ? 1.0f : 0.0f);
@@ -711,6 +741,69 @@ bool Engine::LoadMap(const std::string& mapName) {
                     // Note: We don't have Alias Model (monster) hitboxes implemented in TraceHull yet.
                     // For now, return 0 (World) for the hit entity. We will upgrade this when we implement shooting!
                     vm.SetGlobalEdict(ofs_trace_ent, 0); 
+                    break;
+                }
+                case 44: { // cvar(string name) -> float
+                    std::string cvarName = vm.GetParmString(0);
+                    // Return sensible defaults for common cvars
+                    if (cvarName == "skill") vm.SetReturnFloat(1.0f);
+                    else if (cvarName == "teamplay") vm.SetReturnFloat(0.0f);
+                    else if (cvarName == "deathmatch") vm.SetReturnFloat(0.0f);
+                    else if (cvarName == "coop") vm.SetReturnFloat(0.0f);
+                    else if (cvarName == "noexit") vm.SetReturnFloat(0.0f);
+                    else vm.SetReturnFloat(0.0f);
+                    break;
+                }
+                case 40: { // vectoangles(vector v) -> vector
+                    glm::vec3 v40 = vm.GetParmVector(0);
+                    float yaw40 = 0.0f, pitch40 = 0.0f;
+                    if (std::abs(v40.x) > 0.001f || std::abs(v40.y) > 0.001f) {
+                        yaw40 = std::atan2(v40.y, v40.x) * 180.0f / glm::pi<float>();
+                        if (yaw40 < 0.0f) yaw40 += 360.0f;
+                        float forward40 = std::sqrt(v40.x * v40.x + v40.y * v40.y);
+                        pitch40 = -std::atan2(v40.z, forward40) * 180.0f / glm::pi<float>();
+                    } else if (v40.z > 0.0f) {
+                        pitch40 = -90.0f;
+                    } else {
+                        pitch40 = 90.0f;
+                    }
+                    vm.SetReturnVector(glm::vec3(pitch40, yaw40, 0.0f));
+                    break;
+                }
+                case 41: { // rint(float v) -> float
+                    vm.SetReturnFloat(std::round(vm.GetParmFloat(0)));
+                    break;
+                }
+                case 42: { // floor(float v) -> float
+                    vm.SetReturnFloat(std::floor(vm.GetParmFloat(0)));
+                    break;
+                }
+                case 46: { // ceil(float v) -> float
+                    vm.SetReturnFloat(std::ceil(vm.GetParmFloat(0)));
+                    break;
+                }
+                case 36: { // etos(entity e) -> string (debug)
+                    int32_t e = vm.GetParmEdict(0);
+                    std::string s = std::to_string(e);
+                    vm.SetReturnStringOffset(vm.AllocateString(s));
+                    break;
+                }
+                case 48: { // pointcontents(vector v) -> float
+                    glm::vec3 v = vm.GetParmVector(0);
+                    int contents = m_physics->HullPointContents(0, v, 0);
+                    vm.SetReturnFloat(static_cast<float>(contents));
+                    break;
+                }
+                case 23: { // aim(entity e, float speed) -> vector
+                    // Return forward vector of the entity
+                    int32_t entIdx = vm.GetParmEdict(0);
+                    int32_t ofs_angles_aim = vm.FindFieldOffset("angles");
+                    glm::vec3 angles(0.0f);
+                    if (ofs_angles_aim != -1) {
+                        angles = vm.GetEdictFieldVector(entIdx, ofs_angles_aim);
+                    }
+                    float ay = glm::radians(angles.y);
+                    vm.SetReturnVector(glm::vec3(std::cos(ay), std::sin(ay), 0.0f));
                     break;
                 }
                 default: {
@@ -1091,6 +1184,92 @@ void Engine::MainLoop() {
 
         m_renderer->DrawFrame(*m_camera, *m_map, m_renderEntities, &m_viewModel, uiVerts, totalTime, lightstyleValues);
     }
+}
+
+bool Engine::StepDirection(int32_t edictIdx, float yaw, float dist) {
+    if (m_ofs_origin == -1) return false;
+
+    glm::vec3 origin = m_vm->GetEdictFieldVector(edictIdx, m_ofs_origin);
+
+    float angleRad = glm::radians(yaw);
+    glm::vec3 forwardDir(std::cos(angleRad), std::sin(angleRad), 0.0f);
+    glm::vec3 end = origin + (forwardDir * dist);
+
+    auto TryStep = [&](const glm::vec3& startPos, const glm::vec3& targetEnd, TraceResult& outTrace) -> bool {
+        // 1. Try moving straight first
+        outTrace = m_physics->TraceHull(startPos, targetEnd, 1, m_renderEntities, edictIdx);
+        if (!outTrace.startSolid && outTrace.fraction == 1.0f) {
+            return true;
+        }
+        if (outTrace.startSolid) {
+            return false;
+        }
+
+        // 2. Try stepping up
+        const float sv_stepsize = 18.0f;
+        glm::vec3 stepUpStart = startPos + glm::vec3(0.0f, 0.0f, sv_stepsize);
+        TraceResult traceUp = m_physics->TraceHull(startPos, stepUpStart, 1, m_renderEntities, edictIdx);
+        if (traceUp.startSolid) {
+            return false;
+        }
+
+        glm::vec3 elevatedStart = traceUp.endPos;
+        glm::vec3 elevatedEnd = elevatedStart + (targetEnd - startPos);
+        TraceResult traceForward = m_physics->TraceHull(elevatedStart, elevatedEnd, 1, m_renderEntities, edictIdx);
+        if (traceForward.startSolid) {
+            return false;
+        }
+
+        glm::vec3 stepDownStart = traceForward.endPos;
+        glm::vec3 stepDownEnd = stepDownStart - glm::vec3(0.0f, 0.0f, sv_stepsize);
+        TraceResult traceDown = m_physics->TraceHull(stepDownStart, stepDownEnd, 1, m_renderEntities, edictIdx);
+        if (traceDown.startSolid) {
+            return false;
+        }
+
+        if (traceForward.fraction > 0.0f) {
+            outTrace = traceDown;
+            outTrace.fraction = traceForward.fraction;
+            return true;
+        }
+        return false;
+    };
+
+    // 1. Try moving straight
+    TraceResult trace;
+    if (TryStep(origin, end, trace)) {
+        m_vm->SetEdictFieldVector(edictIdx, m_ofs_origin, trace.endPos);
+        return true;
+    }
+
+    // 2. Straight movement blocked! Try Step-and-Slide (Wall Hugging)
+    // Try moving purely along X
+    glm::vec3 endX = origin + glm::vec3(forwardDir.x * dist, 0.0f, 0.0f);
+    TraceResult traceX;
+    
+    // Try moving purely along Y
+    glm::vec3 endY = origin + glm::vec3(0.0f, forwardDir.y * dist, 0.0f);
+    TraceResult traceY;
+
+    if (std::abs(forwardDir.x) > 0.0f && TryStep(origin, endX, traceX) && traceX.fraction == 1.0f) {
+        m_vm->SetEdictFieldVector(edictIdx, m_ofs_origin, traceX.endPos);
+        return true;
+    }
+    
+    if (std::abs(forwardDir.y) > 0.0f && TryStep(origin, endY, traceY) && traceY.fraction == 1.0f) {
+        m_vm->SetEdictFieldVector(edictIdx, m_ofs_origin, traceY.endPos);
+        return true;
+    }
+
+    // 3. If we can't move the full distance cleanly anywhere, just move as much as we can straight!
+    if (!trace.startSolid && trace.fraction > 0.0f) {
+        m_vm->SetEdictFieldVector(edictIdx, m_ofs_origin, trace.endPos);
+        return true;
+    }
+
+    std::cout << "[Engine] StepDirection Completely Blocked for Edict " << edictIdx << " dist=" << dist << "\n";
+    // Completely blocked
+    return false;
 }
 
 } // namespace engine

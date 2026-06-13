@@ -4,7 +4,7 @@ namespace engine {
 
 Physics::Physics(const Map* map) : m_map(map) {}
 
-TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, const std::vector<RenderEntity>& entities) {
+TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, const std::vector<RenderEntity>& entities, int32_t ignoreEdict) {
     TraceResult trace;
     trace.allSolid = true;
     trace.startSolid = false;
@@ -17,13 +17,12 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
 
     RecursiveHullCheck(trace.rootNode, 0.0f, 1.0f, start, end, trace, hull_id);
 
-    // 2. Trace against Dynamic Brush Entities (Doors, platforms)
+    // 2. Trace against Entities
     for (const auto& ent : entities) {
-        // We only collide with BSP models, not Alias models (like monsters/armor) yet
-        if (ent.type != EntityModelType::BspBrush || ent.modelId == 0) continue;
-
-        // Ignore triggers and non-solid entities!
+        if (ent.edictIndex > 0 && ent.edictIndex == ignoreEdict) continue;
         if (!ent.isSolid) continue; 
+
+        if (ent.type == EntityModelType::BspBrush && ent.modelId != 0) {
 
         const auto& bspModel = m_map->GetBspModel(ent.modelId);
         int rootNode = bspModel.headnode[hull_id];
@@ -54,6 +53,45 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
             trace.planeDist = localTrace.planeDist + glm::dot(localTrace.planeNormal, ent.origin);
             trace.contents = localTrace.contents;
             trace.rootNode = rootNode; 
+        }
+    } else if (ent.type == EntityModelType::Alias) {
+        // [DISABLED] AABB Raycast against Alias Models (Slab Method)
+        // It appears monsters are getting instantly blocked by these bounds.
+        /*
+        // AABB Raycast against Alias Models (Slab Method)
+            // Inflate target bounds by our own Hull size to simulate a sweeping box!
+            glm::vec3 mins = ent.GetAbsMins();
+            glm::vec3 maxs = ent.GetAbsMaxs();
+            
+            if (hull_id == 1) { // Standard player/monster hull
+                mins -= glm::vec3(16, 16, 24);
+                maxs += glm::vec3(16, 16, 32);
+            }
+            
+            glm::vec3 dir = end - start;
+            float tmin = 0.0f;
+            float tmax = 1.0f;
+            bool hit = true;
+            
+            for (int i = 0; i < 3; ++i) {
+                if (std::abs(dir[i]) < 0.0001f) {
+                    if (start[i] < mins[i] || start[i] > maxs[i]) hit = false;
+                } else {
+                    float ood = 1.0f / dir[i];
+                    float t1 = (mins[i] - start[i]) * ood;
+                    float t2 = (maxs[i] - start[i]) * ood;
+                    if (t1 > t2) std::swap(t1, t2);
+                    if (t1 > tmin) tmin = t1;
+                    if (t2 < tmax) tmax = t2;
+                    if (tmin > tmax) hit = false;
+                }
+            }
+            
+            if (hit && tmin >= 0.0f && tmin < trace.fraction) {
+                trace.fraction = tmin;
+                trace.startSolid = (tmin == 0.0f);
+            }
+        */
         }
     }
 
