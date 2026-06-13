@@ -567,6 +567,7 @@ void Renderer::DrawFrame(const Camera& camera, const Map& map, const std::vector
 
     for (const auto& rent : renderEntities) {
         if (rent.type != EntityModelType::Alias) continue;
+        if (!rent.isVisible && !m_showTriggers) continue;
         if (rent.modelId >= m_gpuAliasModels.size()) continue;
 
         const auto& gpuModel = m_gpuAliasModels[rent.modelId];

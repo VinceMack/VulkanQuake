@@ -29,6 +29,7 @@ public:
     std::string CheckTriggers(const std::vector<RenderEntity>& entities);
 
     glm::vec3 GetPosition() const { return m_position; }
+    glm::vec3 GetVelocity() const { return m_velocity; }
 
     void ToggleNoclip() { m_noclip = !m_noclip; }
     bool IsNoclip() const { return m_noclip; }

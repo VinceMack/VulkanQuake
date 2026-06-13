@@ -91,6 +91,7 @@ public:
     }
     void SetReturnStringOffset(int32_t s) { m_globalData[1].string = s; }
     void SetReturnEdict(int32_t e) { m_globalData[1].edict = e; }
+    void SetGlobalVector(int32_t offset, glm::vec3 val);
 
 private:
     std::vector<std::byte> m_rawData;

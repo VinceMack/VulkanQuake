@@ -48,6 +48,9 @@ VirtualMachine::VirtualMachine(std::vector<std::byte> progsData)
     
     // Edict 0 is always reserved for the "World" (worldspawn)
     m_edicts[0].isFree = false;
+    
+    // ---> NEW: Edict 1 is ALWAYS reserved for Player 1
+    m_edicts[1].isFree = false;
 }
 
 void VirtualMachine::PrintInfo() const {
@@ -131,7 +134,9 @@ void VirtualMachine::Execute(int32_t funcIndex) {
 
     const auto& startFunc = m_functions[funcIndex];
     const char* funcName = m_strings + startFunc.s_name;
-    std::cout << "=== VM Executing: " << funcName << " ===\n";
+    int32_t ofs_self = FindGlobalOffset("self");
+    int32_t selfIdx = GetGlobalEdict(ofs_self);
+    std::cout << "=== VM Executing: " << funcName << " (self: " << selfIdx << ") ===\n";
 
     if (startFunc.first_statement < 0) {
         std::cout << "  -> Cannot execute Built-in function directly.\n";
@@ -151,10 +156,7 @@ void VirtualMachine::Execute(int32_t funcIndex) {
             m_traceHistory[m_traceHistoryIndex] = {pc - 1, st.op, st.a, st.b, st.c};
             m_traceHistoryIndex = (m_traceHistoryIndex + 1) % m_traceHistory.size();
 
-            if (std::string(funcName) == "func_plat") {
-                std::cout << "  [plat debug] PC: " << (pc - 1) << " Op: " << st.op << " A: " << st.a << " B: " << st.b << " C: " << st.c << "\n";
-                std::cout.flush();
-            }
+
 
             switch (st.op) {
                 case qc::OP_RETURN:
@@ -395,10 +397,14 @@ void VirtualMachine::Execute(int32_t funcIndex) {
                     int32_t selfIdx = GetGlobalEdict(ofs_self);
                     if (selfIdx >= 0 && selfIdx < static_cast<int32_t>(m_edicts.size())) {
                         float timeVal = GetGlobalFloat(ofs_time);
-                        SetEdictFieldFloat(selfIdx, ofs_frame, static_cast<float>(st.a));
+                        SetEdictFieldFloat(selfIdx, ofs_frame, GetGlobalFloat(st.a));
                         SetEdictFieldFloat(selfIdx, ofs_nextthink, timeVal + 0.1f);
                         if (ofs_think != -1) {
-                            m_edicts[selfIdx].v[ofs_think].function = st.b;
+                            int32_t nextFunc = 0;
+                            if (st.b > 0 && st.b < static_cast<int32_t>(m_globalData.size())) {
+                                nextFunc = m_globalData[st.b].function;
+                            }
+                            m_edicts[selfIdx].v[ofs_think].function = nextFunc;
                         }
                     }
                     break;
@@ -655,6 +661,14 @@ std::string VirtualMachine::GetFieldName(int32_t offset) const {
         }
     }
     return "field_" + std::to_string(offset);
+}
+
+void VirtualMachine::SetGlobalVector(int32_t offset, glm::vec3 val) {
+    if (offset >= 0 && offset + 2 < static_cast<int32_t>(m_globalData.size())) {
+        m_globalData[offset + 0].f = val.x;
+        m_globalData[offset + 1].f = val.y;
+        m_globalData[offset + 2].f = val.z;
+    }
 }
 
 } // namespace engine

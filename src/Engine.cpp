@@ -1,4 +1,5 @@
 #include "Engine.hpp"
+#include <glm/gtc/constants.hpp>
 #include "AliasModel.hpp"
 #include "VirtualFileSystem.hpp"
 #include "UI.hpp"
@@ -256,6 +257,27 @@ void Engine::Init() {
 
 bool Engine::LoadMap(const std::string& mapName) {
     std::cout << "Loading " << mapName << "\n";
+
+    // Save player parameters before we destroy the VM!
+    std::unordered_map<std::string, qc::eval_t> savedParms;
+    if (m_vm) {
+        int32_t setChangeParmsIdx = m_vm->FindFunction("SetChangeParms");
+        if (setChangeParmsIdx != -1) {
+            int32_t ofs_self = m_vm->FindGlobalOffset("self");
+            if (ofs_self != -1) {
+                m_vm->SetGlobalEdict(ofs_self, 1); // self must be player (Edict 1)
+            }
+            m_vm->Execute(setChangeParmsIdx);
+        }
+        for (int i = 1; i <= 16; ++i) {
+            std::string parmName = "parm" + std::to_string(i);
+            int32_t offset = m_vm->FindGlobalOffset(parmName);
+            if (offset != -1) {
+                savedParms[parmName] = m_vm->m_globalData[offset];
+            }
+        }
+    }
+
     std::string bspPath = "maps/" + mapName + ".bsp";
     auto mapData = m_vfs->ReadFile(bspPath);
     
@@ -307,6 +329,14 @@ bool Engine::LoadMap(const std::string& mapName) {
     auto progsData = m_vfs->ReadFile("progs.dat");
     if (progsData) {
         m_vm = std::make_unique<VirtualMachine>(std::move(*progsData));
+
+        // Restore saved parms if we have them (for level transitions)
+        for (const auto& [parmName, val] : savedParms) {
+            int32_t offset = m_vm->FindGlobalOffset(parmName);
+            if (offset != -1) {
+                m_vm->m_globalData[offset] = val;
+            }
+        }
         
         // 1. Cache the specific VM offsets we need for fast Built-in access
         int32_t ofs_self = m_vm->FindGlobalOffset("self");
@@ -317,8 +347,20 @@ bool Engine::LoadMap(const std::string& mapName) {
         int32_t ofs_absmin = m_vm->FindFieldOffset("absmin");
         int32_t ofs_absmax = m_vm->FindFieldOffset("absmax");
 
+        // Cache Trace offsets for Built-in #16
+        int32_t ofs_trace_allsolid = m_vm->FindGlobalOffset("trace_allsolid");
+        int32_t ofs_trace_startsolid = m_vm->FindGlobalOffset("trace_startsolid");
+        int32_t ofs_trace_fraction = m_vm->FindGlobalOffset("trace_fraction");
+        int32_t ofs_trace_endpos = m_vm->FindGlobalOffset("trace_endpos");
+        int32_t ofs_trace_plane_normal = m_vm->FindGlobalOffset("trace_plane_normal");
+        int32_t ofs_trace_plane_dist = m_vm->FindGlobalOffset("trace_plane_dist");
+        int32_t ofs_trace_ent = m_vm->FindGlobalOffset("trace_ent");
+
         // 2. Attach the C++ Router to the VM
-        m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags, ofs_absmin, ofs_absmax](VirtualMachine& vm, int32_t bIdx) {
+        m_vm->SetBuiltinHandler([this, ofs_self, ofs_origin, ofs_mins, ofs_maxs, ofs_flags, ofs_absmin, ofs_absmax,
+                                 ofs_trace_allsolid, ofs_trace_startsolid, ofs_trace_fraction, 
+                                 ofs_trace_endpos, ofs_trace_plane_normal, ofs_trace_plane_dist, ofs_trace_ent]
+                                (VirtualMachine& vm, int32_t bIdx) {
             switch (bIdx) {
                 case 2: { // setorigin(entity e, vector v)
                     int32_t targetEnt = vm.GetParmEdict(0);
@@ -438,12 +480,27 @@ bool Engine::LoadMap(const std::string& mapName) {
                     }
                     break;
                 }
-                case 11: { // objerror(string e)
+                case 33: { // objerror(string e)
                     std::cout << "[QC ObjError] " << vm.GetParmString(0) << "\n";
                     std::cout.flush();
                     throw std::runtime_error("VM Error: objerror: " + vm.GetParmString(0));
                     break;
                 }
+                
+                // ---> NEW: Client connection stubs
+                case 21: // stuffcmd (entity client, string s)
+                    // QuakeC uses this to force the client to execute a console command.
+                    // We can just log it for now!
+                    std::cout << "[QC StuffCmd] " << vm.GetParmString(1) << "\n";
+                    break;
+                case 73: // centerprint (entity client, string s)
+                    // QuakeC sending a big message to the center of the screen
+                    m_console->Print("[CENTERPRINT] " + vm.GetParmString(1));
+                    break;
+                case 11: // bprint (string s)
+                    // Broadcast print to all clients
+                    m_console->Print("[BPRINT] " + vm.GetParmString(0));
+                    break;
                 case 14: { // spawn() -> returns entity
                     int32_t newEnt = vm.AllocateEdict();
                     vm.SetReturnEdict(newEnt);
@@ -511,11 +568,149 @@ bool Engine::LoadMap(const std::string& mapName) {
                     break;
                 }
                 case 32: { // walkmove(float yaw, float dist)
-                    vm.SetReturnFloat(1.0f);
+                    float yaw = vm.GetParmFloat(0);
+                    float dist = vm.GetParmFloat(1);
+
+                    int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
+                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
+
+                    // If distance is 0, they are just testing if they are stuck.
+                    // Since droptofloor succeeded earlier, we assume they are safe.
+                    if (dist == 0.0f) {
+                        vm.SetReturnFloat(1.0f); // True! Not stuck!
+                        break;
+                    }
+
+                    // Calculate the forward direction based on the Yaw
+                    float angleRad = glm::radians(yaw);
+                    glm::vec3 forwardDir(std::cos(angleRad), std::sin(angleRad), 0.0f);
+                    glm::vec3 end = origin + (forwardDir * dist);
+
+                    // Trace Hull 1 (Bounding Box) to see if the monster hit a wall
+                    // Note: Quake technically uses Hulls 2 and 3 for monsters, but Hull 1 works perfectly for now.
+                    TraceResult trace = m_physics->TraceHull(origin, end, 1, m_renderEntities);
+
+                    if (trace.fraction == 1.0f && !trace.startSolid) {
+                        // The path is clear! Move the monster.
+                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
+                        vm.SetReturnFloat(1.0f); // True (Move successful)
+                    } else {
+                        // Hit a wall!
+                        vm.SetReturnFloat(0.0f); // False (Move blocked)
+                    }
                     break;
                 }
-                case 67: { // movetogoal(float dist)
-                    vm.SetReturnFloat(1.0f);
+                case 67: { // movetogoal(float step)
+                    float stepDist = vm.GetParmFloat(0);
+                    int32_t selfIdx = vm.GetGlobalEdict(ofs_self);
+                    
+                    // 1. Find who we are trying to kill
+                    int32_t ofs_enemy = vm.FindFieldOffset("enemy");
+                    int32_t enemyIdx = 0;
+                    if (ofs_enemy != -1) {
+                        enemyIdx = vm.m_edicts[selfIdx].v[ofs_enemy].edict;
+                    }
+
+                    glm::vec3 origin = vm.GetEdictFieldVector(selfIdx, ofs_origin);
+                    glm::vec3 forwardDir(0.0f);
+                    
+                    // 2. If we have an enemy, calculate the direction to them
+                    if (enemyIdx > 0 && enemyIdx < static_cast<int32_t>(vm.m_edicts.size())) {
+                        glm::vec3 enemyOrigin = vm.GetEdictFieldVector(enemyIdx, ofs_origin);
+                        glm::vec3 dir = enemyOrigin - origin;
+                        dir.z = 0.0f; // Keep movement strictly horizontal
+                        
+                        if (glm::length(dir) > 0.1f) {
+                            forwardDir = glm::normalize(dir);
+                            
+                            // Instantly snap the monster's rotation to face the player
+                            float yaw = static_cast<float>(std::atan2(forwardDir.y, forwardDir.x) * 180.0f / glm::pi<float>());
+                            if (yaw < 0.0f) yaw += 360.0f;
+                            
+                            int32_t ofs_angles = vm.FindFieldOffset("angles");
+                            if (ofs_angles != -1) {
+                                vm.SetEdictFieldVector(selfIdx, ofs_angles, glm::vec3(0.0f, yaw, 0.0f));
+                            }
+                        }
+                    } else {
+                        // No enemy? Just walk in the direction we are currently facing
+                        int32_t ofs_angles = vm.FindFieldOffset("angles");
+                        if (ofs_angles != -1) {
+                            glm::vec3 angles = vm.GetEdictFieldVector(selfIdx, ofs_angles);
+                            float angleRad = glm::radians(angles.y);
+                            forwardDir = glm::vec3(std::cos(angleRad), std::sin(angleRad), 0.0f);
+                        }
+                    }
+
+                    // 3. Do the Physics Trace to see if we hit a wall!
+                    glm::vec3 end = origin + (forwardDir * stepDist);
+                    TraceResult trace = m_physics->TraceHull(origin, end, 1, m_renderEntities);
+
+                    if (trace.fraction == 1.0f && !trace.startSolid) {
+                        // The path is clear, physically move the monster!
+                        vm.SetEdictFieldVector(selfIdx, ofs_origin, trace.endPos);
+                        vm.SetReturnFloat(1.0f); // True
+                    } else {
+                        // We bumped into a wall. 
+                        // In real Quake, this triggers complex wall-hugging logic. For now, we just stop.
+                        vm.SetReturnFloat(0.0f); // False
+                    }
+                    break;
+                }
+                case 9: { // normalize(vector v)
+                    glm::vec3 v = vm.GetParmVector(0);
+                    float len = glm::length(v);
+                    if (len > 0.0f) vm.SetReturnVector(glm::normalize(v));
+                    else vm.SetReturnVector(glm::vec3(0.0f));
+                    break;
+                }
+                case 12: { // vlen(vector v)
+                    vm.SetReturnFloat(glm::length(vm.GetParmVector(0)));
+                    break;
+                }
+                case 13: { // vectoangles(vector v)
+                    glm::vec3 v = vm.GetParmVector(0);
+                    float yaw = 0.0f, pitch = 0.0f;
+                    
+                    if (v.y == 0.0f && v.x == 0.0f) {
+                        pitch = (v.z > 0.0f) ? 90.0f : 270.0f;
+                    } else {
+                        yaw = static_cast<float>(std::atan2(v.y, v.x) * 180.0f / glm::pi<float>());
+                        if (yaw < 0.0f) yaw += 360.0f;
+                        
+                        float forward = std::sqrt(v.x * v.x + v.y * v.y);
+                        pitch = static_cast<float>(std::atan2(v.z, forward) * 180.0f / glm::pi<float>());
+                        if (pitch < 0.0f) pitch += 360.0f;
+                    }
+                    // Quake returns Pitch (x), Yaw (y), Roll (z)
+                    vm.SetReturnVector(glm::vec3(pitch, yaw, 0.0f));
+                    break;
+                }
+                case 27: { // spawn()
+                    int32_t newEdict = vm.AllocateEdict();
+                    vm.SetReturnEdict(newEdict);
+                    break;
+                }
+                case 16: { // traceline(vector v1, vector v2, float nomonsters, entity forent)
+                    glm::vec3 v1 = vm.GetParmVector(0);
+                    glm::vec3 v2 = vm.GetParmVector(1);
+                    float nomonsters = vm.GetParmFloat(2);
+                    int32_t forent = vm.GetParmEdict(3); // The entity to ignore (usually 'self')
+
+                    // Hull 0 is the 1D Raycast hull!
+                    TraceResult trace = m_physics->TraceHull(v1, v2, 0, m_renderEntities);
+
+                    // Write the results to QuakeC Global memory!
+                    vm.SetGlobalFloat(ofs_trace_allsolid, trace.allSolid ? 1.0f : 0.0f);
+                    vm.SetGlobalFloat(ofs_trace_startsolid, trace.startSolid ? 1.0f : 0.0f);
+                    vm.SetGlobalFloat(ofs_trace_fraction, trace.fraction);
+                    vm.SetGlobalVector(ofs_trace_endpos, trace.endPos);
+                    vm.SetGlobalVector(ofs_trace_plane_normal, trace.planeNormal);
+                    vm.SetGlobalFloat(ofs_trace_plane_dist, trace.planeDist);
+                    
+                    // Note: We don't have Alias Model (monster) hitboxes implemented in TraceHull yet.
+                    // For now, return 0 (World) for the hit entity. We will upgrade this when we implement shooting!
+                    vm.SetGlobalEdict(ofs_trace_ent, 0); 
                     break;
                 }
                 default: {
@@ -578,6 +773,34 @@ bool Engine::LoadMap(const std::string& mapName) {
         }
 
         // ========================================================================
+        // ---> NEW: Virtualize the Player (Edict 1)
+        // ========================================================================
+        m_console->Print("Executing PutClientInServer...");
+
+        // Tell the VM that Edict 1 is the active entity
+        m_vm->SetGlobalEdict(m_ofs_self, 1);
+
+        // Give the player their starting 3D coordinates from the info_player_start entity!
+        m_vm->SetEdictFieldVector(1, fieldOriginOffset, spawnOrigin);
+        m_vm->SetEdictFieldVector(1, fieldAnglesOffset, glm::vec3(0.0f, spawnAngle, 0.0f));
+
+        // Execute the QuakeC login sequence!
+        // Only run SetNewParms if we didn't restore any saved parameters (meaning it's the first map load/new game).
+        if (savedParms.empty()) {
+            int32_t setNewParmsIdx = m_vm->FindFunction("SetNewParms");
+            if (setNewParmsIdx != -1) {
+                m_vm->Execute(setNewParmsIdx);
+            }
+        }
+
+        int32_t putClientIdx = m_vm->FindFunction("PutClientInServer");
+        if (putClientIdx != -1) {
+            m_vm->Execute(putClientIdx);
+        } else {
+            std::cerr << "WARNING: PutClientInServer not found in progs.dat!\n";
+        }
+
+        // ========================================================================
         // ---> NEW: Sync VM Edicts to C++ RenderEntities
         // ========================================================================
         m_console->Print("Syncing VM Memory to Renderer...");
@@ -607,6 +830,11 @@ bool Engine::LoadMap(const std::string& mapName) {
                 rent.interp = static_cast<float>(rand() % 100) / 100.0f;
                 rent.isSolid = true;
                 rent.isVisible = true;
+
+                // ---> NEW: Hide the local player's 3D model in first-person view!
+                if (rent.edictIndex == 1) {
+                    rent.isVisible = false;
+                }
 
                 if (modelName[0] == '*') {
                     // It's a BSP Brush Entity! (Door, platform)
@@ -705,6 +933,21 @@ void Engine::MainLoop() {
             float currentQCTime = m_vm->GetGlobalFloat(m_ofs_time) + deltaTime;
             m_vm->SetGlobalFloat(m_ofs_time, currentQCTime);
 
+            // ---> NEW: Sync C++ Player State into VM RAM (Edict 1)
+            // QuakeC uses pitch (x), yaw (y), roll (z). Note that Quake pitch is inverted in some math, but standard here.
+            glm::vec3 playerAngles(m_camera->GetPitch(), m_camera->GetYaw(), 0.0f);
+            
+            // We use static offsets 1, 2, 3 instead of named offsets for speed if we don't have them cached,
+            // but let's use the ones we cached! (Make sure you cached m_ofs_velocity and m_ofs_v_angle in LoadMap!)
+            // Actually, let's just look them up if we haven't cached them:
+            static int32_t ofs_velocity = m_vm->FindFieldOffset("velocity");
+            static int32_t ofs_v_angle = m_vm->FindFieldOffset("v_angle");
+
+            m_vm->SetEdictFieldVector(1, m_ofs_origin, m_player->GetPosition());
+            m_vm->SetEdictFieldVector(1, m_ofs_angles, glm::vec3(0.0f, m_camera->GetYaw(), 0.0f));
+            m_vm->SetEdictFieldVector(1, ofs_v_angle, playerAngles);
+            m_vm->SetEdictFieldVector(1, ofs_velocity, m_player->GetVelocity());
+
             // 2. Execute Entity Thinks
             const auto& edicts = m_vm->GetEdicts();
             for (size_t i = 1; i < edicts.size(); ++i) {
@@ -738,10 +981,19 @@ void Engine::MainLoop() {
                     uint32_t vmFrame = static_cast<uint32_t>(m_vm->GetEdictFieldFloat(rent.edictIndex, m_ofs_frame));
                     
                     // If QuakeC changed the frame, update our interpolation logic
-                    if (rent.frame != vmFrame) {
-                        rent.frame = vmFrame;
-                        rent.nextFrame = vmFrame; 
-                        rent.interp = 0.0f;
+                    if (rent.nextFrame != vmFrame) {
+                        rent.frame = rent.nextFrame; // Transition current frame to the old nextFrame
+                        rent.nextFrame = vmFrame;    // Set new target frame
+                        rent.interp = 0.0f;          // Reset interpolation factor
+                    }
+
+                    // Advance interpolation factor
+                    if (rent.interp < 1.0f) {
+                        rent.interp += deltaTime / 0.1f; // Animation state transitions typically take 0.1s in QuakeC
+                        if (rent.interp > 1.0f) {
+                            rent.interp = 1.0f;
+                            rent.frame = rent.nextFrame; // Fully snap to the new frame
+                        }
                     }
                 }
             }

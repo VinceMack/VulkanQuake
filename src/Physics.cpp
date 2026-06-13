@@ -15,14 +15,14 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
     const auto& worldModel = m_map->GetBspModel(0);
     trace.rootNode = worldModel.headnode[hull_id];
 
-    RecursiveHullCheck(trace.rootNode, 0.0f, 1.0f, start, end, trace);
+    RecursiveHullCheck(trace.rootNode, 0.0f, 1.0f, start, end, trace, hull_id);
 
     // 2. Trace against Dynamic Brush Entities (Doors, platforms)
     for (const auto& ent : entities) {
         // We only collide with BSP models, not Alias models (like monsters/armor) yet
         if (ent.type != EntityModelType::BspBrush || ent.modelId == 0) continue;
 
-        // ---> NEW: Ignore triggers and non-solid entities!
+        // Ignore triggers and non-solid entities!
         if (!ent.isSolid) continue; 
 
         const auto& bspModel = m_map->GetBspModel(ent.modelId);
@@ -42,7 +42,7 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
         localTrace.contents = bsp::CONTENTS_EMPTY;
         localTrace.rootNode = rootNode;
 
-        RecursiveHullCheck(rootNode, 0.0f, 1.0f, localStart, localEnd, localTrace);
+        RecursiveHullCheck(rootNode, 0.0f, 1.0f, localStart, localEnd, localTrace, hull_id);
 
         // If we hit this door, and it is CLOSER than the wall we hit earlier, keep it!
         if (localTrace.fraction < trace.fraction || (localTrace.startSolid && !trace.startSolid)) {
@@ -67,35 +67,77 @@ TraceResult Physics::TraceHull(glm::vec3 start, glm::vec3 end, int hull_id, cons
     return trace;
 }
 
-int Physics::HullPointContents(int nodeIndex, const glm::vec3& p) const {
-    const auto& clipNodes = m_map->GetClipNodes();
-    const auto& planes = m_map->GetPlanes();
+int Physics::HullPointContents(int nodeIndex, const glm::vec3& p, int hull_id) const {
+    if (hull_id > 0) {
+        const auto& clipNodes = m_map->GetClipNodes();
+        const auto& planes = m_map->GetPlanes();
 
-    while (nodeIndex >= 0) {
-        const auto& node = clipNodes[nodeIndex];
-        const auto& plane = planes[node.plane_id];
-        
-        float d;
-        // Optimization: Quake axial planes (X, Y, Z) skip the dot product
-        if (plane.type < 3) {
-            d = p[plane.type] - plane.dist;
-        } else {
-            d = glm::dot(p, glm::vec3(plane.normal[0], plane.normal[1], plane.normal[2])) - plane.dist;
-        }
+        while (nodeIndex >= 0) {
+            if (nodeIndex >= static_cast<int>(clipNodes.size())) return bsp::CONTENTS_EMPTY;
+            const auto& node = clipNodes[nodeIndex];
+            const auto& plane = planes[node.plane_id];
+            
+            float d;
+            // Optimization: Quake axial planes (X, Y, Z) skip the dot product
+            if (plane.type < 3) {
+                d = p[plane.type] - plane.dist;
+            } else {
+                d = glm::dot(p, glm::vec3(plane.normal[0], plane.normal[1], plane.normal[2])) - plane.dist;
+            }
 
-        if (d < 0) {
-            nodeIndex = node.children[1];
-        } else {
-            nodeIndex = node.children[0];
+            if (d < 0) {
+                nodeIndex = node.children[1];
+            } else {
+                nodeIndex = node.children[0];
+            }
         }
+        return nodeIndex;
+    } else {
+        const auto& nodes = m_map->GetNodes();
+        const auto& planes = m_map->GetPlanes();
+        const auto& leaves = m_map->GetLeaves();
+
+        while (nodeIndex >= 0) {
+            if (nodeIndex >= static_cast<int>(nodes.size())) return bsp::CONTENTS_EMPTY;
+            const auto& node = nodes[nodeIndex];
+            const auto& plane = planes[node.plane_id];
+            
+            float d;
+            if (plane.type < 3) {
+                d = p[plane.type] - plane.dist;
+            } else {
+                d = glm::dot(p, glm::vec3(plane.normal[0], plane.normal[1], plane.normal[2])) - plane.dist;
+            }
+
+            if (d < 0) {
+                nodeIndex = node.children[1];
+            } else {
+                nodeIndex = node.children[0];
+            }
+        }
+        int leafIndex = ~nodeIndex;
+        if (leafIndex >= 0 && leafIndex < static_cast<int>(leaves.size())) {
+            return leaves[leafIndex].contents;
+        }
+        return bsp::CONTENTS_EMPTY;
     }
-    return nodeIndex;
 }
 
-bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 p1, glm::vec3 p2, TraceResult& trace) const {
+bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 p1, glm::vec3 p2, TraceResult& trace, int hull_id) const {
     // If node is a leaf (negative)
     if (nodeIndex < 0) {
-        if (nodeIndex != bsp::CONTENTS_SOLID) {
+        int contents = bsp::CONTENTS_EMPTY;
+        if (hull_id > 0) {
+            contents = nodeIndex;
+        } else {
+            int leafIndex = ~nodeIndex;
+            const auto& leaves = m_map->GetLeaves();
+            if (leafIndex >= 0 && leafIndex < static_cast<int>(leaves.size())) {
+                contents = leaves[leafIndex].contents;
+            }
+        }
+
+        if (contents != bsp::CONTENTS_SOLID) {
             trace.allSolid = false;
         } else {
             trace.startSolid = true;
@@ -103,11 +145,27 @@ bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 
         return true; // We hit a leaf, so this sector is clear
     }
 
-    const auto& clipNodes = m_map->GetClipNodes();
     const auto& planes = m_map->GetPlanes();
+    uint32_t plane_id;
+    int children[2];
 
-    const auto& node = clipNodes[nodeIndex];
-    const auto& plane = planes[node.plane_id];
+    if (hull_id > 0) {
+        const auto& clipNodes = m_map->GetClipNodes();
+        if (nodeIndex >= static_cast<int>(clipNodes.size())) return true;
+        const auto& node = clipNodes[nodeIndex];
+        plane_id = node.plane_id;
+        children[0] = node.children[0];
+        children[1] = node.children[1];
+    } else {
+        const auto& nodes = m_map->GetNodes();
+        if (nodeIndex >= static_cast<int>(nodes.size())) return true;
+        const auto& node = nodes[nodeIndex];
+        plane_id = node.plane_id;
+        children[0] = node.children[0];
+        children[1] = node.children[1];
+    }
+
+    const auto& plane = planes[plane_id];
     glm::vec3 normal = glm::vec3(plane.normal[0], plane.normal[1], plane.normal[2]);
 
     float t1, t2;
@@ -120,10 +178,10 @@ bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 
     }
 
     if (t1 >= 0.0f && t2 >= 0.0f) {
-        return RecursiveHullCheck(node.children[0], p1f, p2f, p1, p2, trace);
+        return RecursiveHullCheck(children[0], p1f, p2f, p1, p2, trace, hull_id);
     }
     if (t1 < 0.0f && t2 < 0.0f) {
-        return RecursiveHullCheck(node.children[1], p1f, p2f, p1, p2, trace);
+        return RecursiveHullCheck(children[1], p1f, p2f, p1, p2, trace, hull_id);
     }
 
     // Put the crosspoint DIST_EPSILON pixels on the near side
@@ -146,14 +204,14 @@ bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 
     glm::vec3 mid = p1 + (p2 - p1) * frac;
 
     // Move up to the node on the near side
-    if (!RecursiveHullCheck(node.children[side], p1f, midf, p1, mid, trace)) {
+    if (!RecursiveHullCheck(children[side], p1f, midf, p1, mid, trace, hull_id)) {
         return false;
     }
 
     // Check if the far side is actually solid
-    if (HullPointContents(node.children[side ^ 1], mid) != bsp::CONTENTS_SOLID) {
+    if (HullPointContents(children[side ^ 1], mid, hull_id) != bsp::CONTENTS_SOLID) {
         // Go past the node, we didn't hit a wall!
-        return RecursiveHullCheck(node.children[side ^ 1], midf, p2f, mid, p2, trace);
+        return RecursiveHullCheck(children[side ^ 1], midf, p2f, mid, p2, trace, hull_id);
     }
 
     if (trace.allSolid) {
@@ -172,7 +230,7 @@ bool Physics::RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 
     }
 
     // Back up if floating point precision pushed us into the wall
-    while (HullPointContents(trace.rootNode, mid) == bsp::CONTENTS_SOLID) {
+    while (HullPointContents(trace.rootNode, mid, hull_id) == bsp::CONTENTS_SOLID) {
         frac -= 0.1f;
         if (frac < 0.0f) {
             trace.fraction = midf;

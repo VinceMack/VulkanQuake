@@ -25,10 +25,10 @@ public:
 
 private:
     // Required to check if a specific point is inside a wall
-    int HullPointContents(int nodeIndex, const glm::vec3& p) const;
+    int HullPointContents(int nodeIndex, const glm::vec3& p, int hull_id) const;
     
     // Now returns bool (true if empty/clear, false if hit)
-    bool RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 p1, glm::vec3 p2, TraceResult& trace) const;
+    bool RecursiveHullCheck(int nodeIndex, float p1f, float p2f, glm::vec3 p1, glm::vec3 p2, TraceResult& trace, int hull_id) const;
 
     const Map* m_map;
 };

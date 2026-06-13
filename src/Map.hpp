@@ -56,6 +56,8 @@ public:
 
     std::span<const bsp::BspPlane> GetPlanes() const { return m_bspPlanes; }
     std::span<const bsp::BspClipNode> GetClipNodes() const { return m_bspClipNodes; }
+    std::span<const bsp::BspNode> GetNodes() const { return m_bspNodes; }
+    std::span<const bsp::BspLeaf> GetLeaves() const { return m_bspLeaves; }
     const bsp::BspModel& GetBspModel(uint32_t index) const { return m_bspModels[index]; }
 
     uint32_t GetMaxIndexCount() const { return static_cast<uint32_t>(m_masterIndices.size()); }
